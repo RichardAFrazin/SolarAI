@@ -4,21 +4,24 @@
 Created on Mon Jul  6 19:52:07 2026
 
 @author: rfrazin
+
+my highway.mp4 video comes from the pixbay.com website:
+   pixabay.com/videos/car-road-transportation-vehicle-2165/
+
+
 """
 
 import numpy as np
 import cv2
 
 mp4file = "highway.mp4"; cen1 = (200,381); cen2 = (200, 262); npix=80
-setupdict = {'sz': npix, 'n_ang': 26}
+setup = {'sz': npix, 'n_ang': 26, 'n_rays': int(np.round(2*np.sqrt(2)*npix)) }
 
 
-def ProjectionMatrix(setup=setupdict):
+def ProjectionMatrix(setup=setup):
     sz = setup['sz']  # Tamaño de la imagen (suponiendo que es cuadrada)
     n_ang = setup['n_ang']  # Número de ángulos de vista
-
-    # Número de rayos por ángulo (M), calculado con la fórmula ajustada
-    M = int(np.ceil(setup['proj_resolution']*np.sqrt(2)*sz))  # Número de rayos por ángulo
+    M = setup['n_rays']  # Número de rayos por ángulo
     d_ray = np.sqrt(2) * sz / M  # Distancia entre rayos
 
     # Ángulos de vista (en radianes)
@@ -93,7 +96,7 @@ def ProjectionMatrix(setup=setupdict):
 
 
 
-def rebin2Darray(array, new_shape): #rebin by averaging
+def rebin2Darray(array, new_shape): #rebin by averaging over 2x2 pixels
    shape = (new_shape[0], array.shape[0]//new_shape[0], #4  dimensions
             new_shape[1], array.shape[1]//new_shape[1])
    return( array.reshape(shape).mean(3).mean(1) )
