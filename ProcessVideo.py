@@ -24,7 +24,7 @@ def ProjectionMatrix(setup=setup):
     M = setup['n_rays']  # Número de rayos por ángulo
     d_ray = np.sqrt(2) * sz / M  # Distancia entre rayos
 
-    # Ángulos de vista (en radianes)
+    # projection angles
     angles = np.linspace(np.pi / (2 * n_ang), np.pi * (1 - 1 / (2 * n_ang)), n_ang)
 
     # Crear la matriz A (n_ang * M x sz^2), inicializada en ceros
@@ -38,39 +38,31 @@ def ProjectionMatrix(setup=setup):
     t_max = np.sqrt(2) * sz / 2  # El valor máximo de |t| (la distancia más larga desde el centro de la imagen)
 
     # Umbral de tolerancia para los ángulos cercanos a los valores singulares (0, pi/2, pi)
-    epsilon = 1e-6  # Tolerancia para evitar los ángulos horizontales/verticales
-
+    eps_ang = 1e-4  # Tolerancia para evitar los ángulos horizontales/verticales
     # Para cada ángulo de proyección
     for i, angle in enumerate(angles):
-        # Verificar si el ángulo es cercano a los valores singulares
-        if abs(abs(angle) - np.pi) < epsilon or abs(abs(angle) - np.pi/2) < epsilon:
-            continue  # Si es casi horizontal o casi vertical, descartamos este ángulo
-
+        VerticalRays = False; HorizontalRays = False
+        if abs(angle - np.pi) < eps_ang or abs(angle) < eps_ang :  # horizontal projection
+           VerticalRays = True
+        if abs(angle - np.pi/2) < eps_ang or abs(angle + np.pi/2) < eps_ang: # vertical projection
+           HorizontalRays = True
         cos_angle = np.cos(angle)
         sin_angle = np.sin(angle)
-
-        # Definir el origen del rayo, proyectado según el ángulo
         s = np.array([-sin_angle, cos_angle])  # Dirección del rayo (unit vector)
-
-        # Para cada rayo asociado con este ángulo (cada uno de los M rayos)
         for m in range(M):
             p0_m = (m - M // 2) * d_ray * np.array([cos_angle, sin_angle])  # Desplazamiento del rayo
-
-            # Calcular las intersecciones del rayo con las líneas horizontales y verticales
-            intersections = []
-
-            # Intersecciones con las líneas verticales (para cada x)
-            if abs(angle - np.pi/2) > epsilon and abs(angle + np.pi/2) > epsilon:
-              for x in vertical_lines:
+            intersections = []  # list of intersection "times" with the vertical and horizontal grid lines
+            for x in vertical_lines:
+               if VerticalRays:
+                  continue
                   t = (x - p0_m[0]) / s[0]
                   if -t_max < t < t_max:
                     intersections.append(('v', x, t))
-
-            # Intersecciones con las líneas horizontales (para cada y)
-            if abs(angle) > epsilon and abs(angle - np.pi) > epsilon:
-              for y in horizontal_lines:
-                  t = (y - p0_m[1]) / s[1]
-                  if -t_max < t <=t_max:
+            for y in horizontal_lines:
+                 if HorizontalRays:
+                    continue
+                 t = (y - p0_m[1]) / s[1]
+                 if -t_max < t <=t_max:
                     intersections.append(('h', y, t))
 
             # Ordenar las intersecciones por el valor de t (distancia)
