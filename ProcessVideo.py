@@ -12,30 +12,20 @@ my highway.mp4 video comes from the pixbay.com website:
 """
 
 import numpy as np
+from scipy.interpolate import Akima1DInterpolator as Akima
 import cv2
 
 mp4file = "highway.mp4"; cen1 = (200,381); cen2 = (200, 262); npix=80
 setup = {'sz': npix, 'n_ang': 26, 'n_rays': int(np.round(2*np.sqrt(2)*npix)) }
 #%%
 
-#This accumulates the submatrices corresponding to the projection angles
-def ProjectionMatrix(setup=setup):
-    n_ang = setup['n_ang']  # setup  projection angles
-    angles = np.linspace(np.pi / (2 * n_ang), np.pi * (1 - 1 / (2 * n_ang)), n_ang)
-    A = [] # the submatrices will be appended to A
-    nrowsA = 0 # number of rows A will eventually have
-    for i, angle in enumerate(angles):  # get the submatrix for each projection angle
-        A_i = ProjectionSubMatrix(angle, setup=setup)
-        A.append(A_i)
-        nrowsA += A_i.shape[0]
-    A = np.array(A).reshape((nrowsA, A_i.shape[1]))
-    return(A)
-
 #This calculates the matrix corresponding to the projection at input angle
 #  The intput angle is in radian units.
 #  angle = 0 corresponds to a horizontal projection with the screen parallel to the y-axis,
 #        and the rays parallel to the x-axis.
 def ProjectionSubMatrix(angle, setup=setup):
+    if (angle < - np.pi) or (angle > np.pi):
+       raise ValueError("angle must between -pi and pi.")
     sz = setup['sz']  # Tamaño de la imagen (suponiendo que es cuadrada)
     M = setup['n_rays']  # Número de rayos por ángulo
     d_ray = np.sqrt(2) * sz / M  # Distancia entre rayos
@@ -47,7 +37,7 @@ def ProjectionSubMatrix(angle, setup=setup):
     t_max = np.sqrt(2) * sz / 2  # El valor máximo de |t| (la distancia más larga desde el centro de la imagen)
     eps_ang = 1.0e-5  # Tolerancia para tratar los ángulos horizontales/verticales
     VerticalRays = False; HorizontalRays = False
-    if abs(angle - np.pi) < eps_ang or abs(angle) < eps_ang :  # horizontal projection
+    if abs(angle - np.pi) < eps_ang or abs(angle) < eps_ang or (angle + np.pi) < eps_ang :  # horizontal projection
       HorizontalRays = True
     if abs(angle - np.pi/2) < eps_ang or abs(angle + np.pi/2) < eps_ang: # vertical projection
       VerticalRays = True
@@ -83,6 +73,65 @@ def ProjectionSubMatrix(angle, setup=setup):
 
 #%%
 
+#this uses SciPy's Akima1DInterpolator to evaluate a video at times between the frame numbers
+#  video - the video to be evalued.  The first dimension is the frames. E.g., (3000, 256,256) for
+#
+#  times specifies the frame numbers, or fractions thereof, at which the video will be evaluated.
+#     times can be a single float or integer, list or 1D array of times.
+#
+def VideoInterpolate(times, video):
+   tt = np.atleast_1d(times)  # converts times to an np.array
+   if video.ndim != 3:
+      raise ValueError("video must be a 3D array.")
+   if not ( all(tt >= 0.) and all(tt <= video.shape[0]-1) ):
+      raise ValueError("all times must be at least zero and less than the (number of frames in the video)-1.")
+   frames = np.arange(video.shape[0])
+   interpolator = Akima(frames, video, axis=0)
+   res = interpolator(tt)
+   if np.isscalar(times):  # drop the unwanted dimension from the output
+      return(res[0])
+   return( res )
+
+#This accumulates the submatrices corresponding to the projection angles
+def ProjectionMatrix(setup=setup):
+    n_ang = setup['n_ang']  # setup  projection angles
+    angles = np.linspace(np.pi / (2 * n_ang), np.pi * (1 - 1 / (2 * n_ang)), n_ang)
+    A = [] # the submatrices will be appended to A
+    nrowsA = 0 # number of rows A will eventually have
+    for i, angle in enumerate(angles):  # get the submatrix for each projection angle
+        A_i = ProjectionSubMatrix(angle, setup=setup)
+        A.append(A_i)
+        nrowsA += A_i.shape[0]
+    A = np.array(A).reshape((nrowsA, A_i.shape[1]))
+    return(A)
+
+#This returns the set of projections corresponds to a given set of tuples, specified in the
+#  in AnglesTimes input variable, which is a list of tuples in the form (time, angle).
+#It optionally returns the projection matrix corresponding to all of the angles at a fixed time, which permits static reconstruction.
+#The time value in each tuple corresponds to a frame number.  See the VideoInerpolate function
+#The angle (between -pi and pi) in each angle is in radian units
+#video - 3D np.array in which the 0th index corresponds to the frames.  See VideoInterpolate
+#ReturnProjMat - set to True in order to get the static projection matrix for the angles in AnglesTimes
+def ProjectionTimeSeries(AnglesTimes, video, setup=setup, ReturnProjMat=False):
+    if video.ndim != 3:
+      raise ValueError("video must be a 3D array.")
+    times = [] ;  projs = []  # projections will be collected here
+    A = [];  # if desired, the proj matrix will be collected here
+    for k, tup in enumerate(AnglesTimes):  # k is the interpolated video index
+       times.append(tup[1])
+    vid = VideoInterpolate(times, video)
+    nrowsA = 0
+    for k, tup in enumerate(AnglesTimes):
+      A_i = ProjectionSubMatrix(tup[0], setup=setup)
+      projs.append( A_i@vid[k,:,:].reshape((A_i.shape[1],)) )
+      if ReturnProjMat:
+          nrowsA += A_i.shape[0]
+          A.append(A_i)
+    if ReturnProjMat:
+       A = np.array(A).reshape((nrowsA, setup['sz']**2))
+       return( (projs, A) )
+    else:
+       return A
 
 def rebin2Darray(array, new_shape): #rebin by averaging over 2x2 pixels
    shape = (new_shape[0], array.shape[0]//new_shape[0], #4  dimensions
@@ -115,6 +164,15 @@ for k in range(vid.shape[0]):
    vid[k,:,:] /= vid[k,:,:].max()
 vid1 = vid[:,cen1[0]-npix//2:cen1[0]+npix//2, cen1[1]-npix//2:cen1[1]+npix//2]
 vid2 = vid[:,cen2[0]-npix//2:cen2[0]+npix//2, cen2[1]-npix//2:cen2[1]+npix//2]
+
+def demo():
+   lilvid = vid1[1121:1121+40,:,:]
+   n_ang = 13
+   angs = np.linspace(0, np.pi*(n_ang-1)/n_ang , n_ang)
+   times = np.linspace(0, 39.5, n_ang)
+   AngTimes = zip(angs, times)
+   projs, Mat = ProjectionTimeSeries(AngTimes, lilvid, setup=setup, ReturnProjMat=False)
+   return (projs, Mat)
 
 
 #%%    ######## Junk Yard  ################
