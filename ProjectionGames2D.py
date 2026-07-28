@@ -12,12 +12,14 @@ my highway.mp4 video comes from the pixbay.com website:
 """
 
 import numpy as np
+import matplotlib.pyplot as plt
 from scipy.interpolate import Akima1DInterpolator as Akima
+import scipy.sparse as sp
 import cv2
 
 mp4file = "highway.mp4"; cen1 = (200,381); cen2 = (200, 262); npix=80
 setup = {'sz': npix, 'n_ang': 26, 'n_rays': int(np.round(2*np.sqrt(2)*npix)) }
-#%%
+
 
 #This calculates the matrix corresponding to the projection at input angle
 #  The intput angle is in radian units.
@@ -82,9 +84,9 @@ def ProjectionSubMatrix(angle, setup=setup):
 def VideoInterpolate(times, video):
    tt = np.atleast_1d(times)  # converts times to an np.array
    if video.ndim != 3:
-      raise ValueError("video must be a 3D array.")
+      raise ValueError(f"Video shape is {video.shape}.  Video must be a 3D array.")
    if not ( all(tt >= 0.) and all(tt <= video.shape[0]-1) ):
-      raise ValueError("all times must be at least zero and less than the (number of frames in the video)-1.")
+      raise ValueError(f"Input time = {tt}.  All times must be at least zero and less than the (number of frames in the video)-1.")
    frames = np.arange(video.shape[0])
    interpolator = Akima(frames, video, axis=0)
    res = interpolator(tt)
@@ -107,14 +109,15 @@ def ProjectionMatrix(setup=setup):
 
 #This returns the set of projections corresponds to a given set of tuples, specified in the
 #  in AnglesTimes input variable, which is a list of tuples in the form (time, angle).
+#  AnglesTimes can also be a zip object
 #It optionally returns the projection matrix corresponding to all of the angles at a fixed time, which permits static reconstruction.
 #The time value in each tuple corresponds to a frame number.  See the VideoInerpolate function
 #The angle (between -pi and pi) in each angle is in radian units
 #video - 3D np.array in which the 0th index corresponds to the frames.  See VideoInterpolate
 #ReturnProjMat - set to True in order to get the static projection matrix for the angles in AnglesTimes
 def ProjectionTimeSeries(AnglesTimes, video, setup=setup, ReturnProjMat=False):
-    if video.ndim != 3:
-      raise ValueError("video must be a 3D array.")
+    if video.ndim != 3:  raise ValueError("video must be a 3D array.")
+    AnglesTimes = list(AnglesTimes)  #  this will do nothing if it is already a list, but it turns into a list if it is a zip object
     times = [] ;  projs = []  # projections will be collected here
     A = [];  # if desired, the proj matrix will be collected here
     for k, tup in enumerate(AnglesTimes):  # k is the interpolated video index
@@ -122,16 +125,20 @@ def ProjectionTimeSeries(AnglesTimes, video, setup=setup, ReturnProjMat=False):
     vid = VideoInterpolate(times, video)
     nrowsA = 0
     for k, tup in enumerate(AnglesTimes):
-      A_i = ProjectionSubMatrix(tup[0], setup=setup)
-      projs.append( A_i@vid[k,:,:].reshape((A_i.shape[1],)) )
-      if ReturnProjMat:
+        A_i = ProjectionSubMatrix(tup[0], setup=setup)
+        projs.append( A_i@vid[k,:,:].reshape((A_i.shape[1],)) )
+        if ReturnProjMat:
           nrowsA += A_i.shape[0]
           A.append(A_i)
     if ReturnProjMat:
-       A = np.array(A).reshape((nrowsA, setup['sz']**2))
+       A = np.array(A).reshape((nrowsA, A_i.shape[1]))
        return( (projs, A) )
     else:
        return A
+
+
+
+#%%  movie manipulation
 
 def rebin2Darray(array, new_shape): #rebin by averaging over 2x2 pixels
    shape = (new_shape[0], array.shape[0]//new_shape[0], #4  dimensions
@@ -151,7 +158,6 @@ def Loadmp4(filename=mp4file):
       frames.append(gray_frame)
    cap.release()
    return(np.array(frames))
-#%%
 
 lgvid = Loadmp4(); #lgvid has shape (3000,720,1280)
 vid = []
@@ -165,74 +171,73 @@ for k in range(vid.shape[0]):
 vid1 = vid[:,cen1[0]-npix//2:cen1[0]+npix//2, cen1[1]-npix//2:cen1[1]+npix//2]
 vid2 = vid[:,cen2[0]-npix//2:cen2[0]+npix//2, cen2[1]-npix//2:cen2[1]+npix//2]
 
-def demo():
-   lilvid = vid1[1121:1121+40,:,:]
-   n_ang = 13
+#%  Codes for Demos
+
+#This creates a representation of the $\nabla$ operator in sparse matrix format for regularization.
+#The solution being regularized corresponds to an N-by-N image.
+def Nabla_sparse(N):
+    main_diag = - np.ones(N);
+    main_diag[-1] = 0.  # there is no neighbor the right
+    upper_diag = np.ones(N-1)
+
+    D = sp.diags([main_diag, upper_diag], [0, 1], shape=(N, N), format='csr')
+    Id = sp.eye(N, format='csr')
+    #extend this to 2D
+    Dx = sp.kron(Id, D, format='csr')
+    Dy = sp.kron(D, Id, format='csr')
+    Nabla = sp.vstack([Dx, Dy] ,format='csr')
+    return Nabla
+
+def demo_static(video, regparam=0.01):
+   n_ang = 31
    angs = np.linspace(0, np.pi*(n_ang-1)/n_ang , n_ang)
-   times = np.linspace(0, 39.5, n_ang)
-   AngTimes = zip(angs, times)
-   projs, Mat = ProjectionTimeSeries(AngTimes, lilvid, setup=setup, ReturnProjMat=False)
-   return (projs, Mat)
+   #times = np.linspace(0, 38.5, n_ang)
+   times = 7*np.ones((n_ang,))   #frame number 20
+   AngTimes = list(zip(angs, times))
+   projs, Mat = ProjectionTimeSeries(AngTimes, video, setup=setup, ReturnProjMat=True)
+
+   projs = np.array(projs).reshape((len(projs)*len(projs[0],))) #convert from a list of vectors into a big vector
+   Mat = sp.csr_matrix(Mat)  # put into csr format.  The inverse is the .toarray() method.
+   #regparam = 0.001  # regularization parameter.
+   Reg = Nabla_sparse(setup['sz'])  # regularization matrix
+   Mat = sp.vstack([Mat, regparam*Reg], format='csr')  #   #stack system matrix with reg matrix
+   y = np.hstack([projs, np.zeros((Reg.shape[0],))])  # augment 'y' vector
+
+   # iterative least-squares solution via the LSMR method
+   LSMR = sp.linalg.lsmr
+   x, istop, itn, normr, normar, norma, conda, normx = LSMR(Mat, y,
+      atol=1.e-6, btol=1.e-6, maxiter=100, show=True)  # atol - matrix resid, btol - y resid
+   return x
+
+def demo_dynamic(video, regparam=0.1):
+   n_ang = 31
+   angs = np.linspace(0, np.pi*(n_ang-1)/n_ang , n_ang)
+   times = np.linspace(2, 12, n_ang)
+   AngTimes = list(zip(angs, times))
+   projs, Mat = ProjectionTimeSeries(AngTimes, video, setup=setup, ReturnProjMat=True)
+
+   projs = np.array(projs).reshape((len(projs)*len(projs[0],))) #convert from a list of vectors into a big vector
+   Mat = sp.csr_matrix(Mat)  # put into csr format.  The inverse is the .toarray() method.
+   #regparam = 0.001  # regularization parameter.
+   Reg = Nabla_sparse(setup['sz'])  # regularization matrix
+   Mat = sp.vstack([Mat, regparam*Reg], format='csr')  #   #stack system matrix with reg matrix
+   y = np.hstack([projs, np.zeros((Reg.shape[0],))])  # augment 'y' vector
+
+   # iterative least-squares solution via the LSMR method
+   LSMR = sp.linalg.lsmr
+   x, istop, itn, normr, normar, norma, conda, normx = LSMR(Mat, y,
+      atol=1.e-6, btol=1.e-6, maxiter=100, show=True)  # atol - matrix resid, btol - y resid
+   return x
+
+#%%    run demos
+lilvid = vid1[1121:1121+40,:,:]
 
 
-#%%    ######## Junk Yard  ################
+x_static = demo_static(lilvid, regparam=0.02)
+x_dynamic = demo_dynamic(lilvid, regparam=0.05)
 
-
-def _ProjectionMatrix(setup=setup):
-    sz = setup['sz']  # Tamaño de la imagen (suponiendo que es cuadrada)
-    n_ang = setup['n_ang']  # Número de ángulos de vista
-    M = setup['n_rays']  # Número de rayos por ángulo
-    d_ray = np.sqrt(2) * sz / M  # Distancia entre rayos
-
-    # projection angles
-    angles = np.linspace(np.pi / (2 * n_ang), np.pi * (1 - 1 / (2 * n_ang)), n_ang)
-
-    # Crear la matriz A (n_ang * M x sz^2), inicializada en ceros
-    A = np.zeros((n_ang * M, sz**2))
-
-    # Definir las líneas de la cuadrícula (líneas horizontales y verticales)
-    vertical_lines = np.linspace(-sz//2, sz//2, sz+1)  # Líneas verticales que definen los límites de los píxeles
-    horizontal_lines = np.linspace(-sz//2, sz//2, sz+1)  # Líneas horizontales que definen los límites de los píxeles
-    eps_ang = 1.0e-5  # Tolerancia para tratar los ángulos horizontales/verticales
-
-    # Definir los límites de t
-    t_max = np.sqrt(2) * sz / 2  # El valor máximo de |t| (la distancia más larga desde el centro de la imagen)
-
-    for i, angle in enumerate(angles):  # rays are PARALLEL to the projection angle
-        VerticalRays = False; HorizontalRays = False
-        if abs(angle - np.pi) < eps_ang or abs(angle) < eps_ang :  # horizontal projection
-           HorizontalRays = True
-        if abs(angle - np.pi/2) < eps_ang or abs(angle + np.pi/2) < eps_ang: # vertical projection
-           VerticalRays = True
-        sin = np.sin(angle); cos = np.cos(angle)
-        s = np.array([cos, sin]) # unit vector along rays
-
-        for m in range(M):
-            p0_m = (m - M // 2)*d_ray*np.array([- sin, cos])  # central point of ray
-            intersections = []  # list of intersection "times" with the vertical and horizontal grid lines
-            for x in vertical_lines:
-               if VerticalRays:
-                  continue
-               t = (x - p0_m[0]) / s[0]
-               if -t_max < t < t_max:
-                    intersections.append(('v', x, t))
-            for y in horizontal_lines:
-                 if HorizontalRays:
-                    continue
-                 t = (y - p0_m[1]) / s[1]
-                 if -t_max < t <=t_max:
-                    intersections.append(('h', y, t))
-            intersections.sort(key = lambda x: x[2])  # sort intersections
-
-            # Ahora, para cada par de intersecciones consecutivas, actualizamos la matriz A
-            for j in range(1, len(intersections)):
-                prev_t = intersections[j-1][2]  # Valor t de la intersección anterior
-                curr_t = intersections[j][2]  # Valor t de la intersección actual
-                t_mid = 0.5 * (prev_t + curr_t)  # Valor t medio entre las intersecciones
-                q = p0_m + s*t_mid
-                pixel_x = int(np.round(q[0] + sz // 2))  # Convertir coordenada x a índice de píxel
-                pixel_y = int(np.round(q[1] + sz // 2))  # Convertir coordenada y a índice de píxel
-                if 0 <= pixel_x < sz and 0 <= pixel_y < sz:  # Asegurarse de que los índices estén dentro del rango
-                    A[i*M + m, pixel_y * sz + pixel_x] = curr_t-prev_t  # Asignar valor en la matriz A
-            A /= sz  # normalization by the typical ray length
-    return A
+plt.figure(); plt.imshow(lilvid[2,:,:],cmap='coolwarm');plt.colorbar();plt.title('frame 2, True');
+plt.figure(); plt.imshow(lilvid[7,:,:],cmap='coolwarm');plt.colorbar();plt.title('frame 7, True');
+plt.figure(); plt.imshow(lilvid[12,:,:],cmap='coolwarm');plt.colorbar();plt.title('frame 12, True');
+plt.figure(); plt.imshow(x_static.reshape((80,80)),cmap='coolwarm');plt.colorbar();plt.title('frame 7, static recon');
+plt.figure(); plt.imshow(x_dynamic.reshape((80,80)),cmap='coolwarm');plt.colorbar();plt.title('frames 2-12, dynamic recon');
