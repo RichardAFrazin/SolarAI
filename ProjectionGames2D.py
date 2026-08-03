@@ -74,6 +74,18 @@ def ProjectionSubMatrix(angle, setup=setup):
     return(A_i)
 
 #%%
+#This accumulates the submatrices corresponding to the projection angles
+def ProjectionMatrix(setup=setup):
+    n_ang = setup['n_ang']  # setup  projection angles
+    angles = np.linspace(np.pi / (2 * n_ang), np.pi * (1 - 1 / (2 * n_ang)), n_ang)
+    A = [] # the submatrices will be appended to A
+    nrowsA = 0 # number of rows A will eventually have
+    for i, angle in enumerate(angles):  # get the submatrix for each projection angle
+        A_i = ProjectionSubMatrix(angle, setup=setup)
+        A.append(A_i)
+        nrowsA += A_i.shape[0]
+    A = np.array(A).reshape((nrowsA, A_i.shape[1]))
+    return(A)
 
 #this uses SciPy's Akima1DInterpolator to evaluate a video at times between the frame numbers
 #  video - the video to be evalued.  The first dimension is the frames. E.g., (3000, 256,256) for
@@ -93,19 +105,6 @@ def VideoInterpolate(times, video):
    if np.isscalar(times):  # drop the unwanted dimension from the output
       return(res[0])
    return( res )
-
-#This accumulates the submatrices corresponding to the projection angles
-def ProjectionMatrix(setup=setup):
-    n_ang = setup['n_ang']  # setup  projection angles
-    angles = np.linspace(np.pi / (2 * n_ang), np.pi * (1 - 1 / (2 * n_ang)), n_ang)
-    A = [] # the submatrices will be appended to A
-    nrowsA = 0 # number of rows A will eventually have
-    for i, angle in enumerate(angles):  # get the submatrix for each projection angle
-        A_i = ProjectionSubMatrix(angle, setup=setup)
-        A.append(A_i)
-        nrowsA += A_i.shape[0]
-    A = np.array(A).reshape((nrowsA, A_i.shape[1]))
-    return(A)
 
 #This returns the set of projections corresponds to a given set of tuples, specified in the
 #  in AnglesTimes input variable, which is a list of tuples in the form (time, angle).
