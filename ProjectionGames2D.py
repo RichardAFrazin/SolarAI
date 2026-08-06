@@ -113,11 +113,14 @@ def VideoInterpolate(times, video):
 #The time value in each tuple corresponds to a frame number.  See the VideoInerpolate function
 #The angle (between -pi and pi) in each angle is in radian units
 #video - 3D np.array in which the 0th index corresponds to the frames.  See VideoInterpolate
-#ReturnProjMat - set to True in order to get the static projection matrix for the angles in AnglesTimes
-def ProjectionTimeSeries(AnglesTimes, video, setup=setup, ReturnProjMat=False):
+#ReturnProjMat - if True, return the static projection matrix for the angles in AnglesTimes
+#ReturnBackProjs - if True, return a 3D array of backprojected images instead of the projections themselves
+def ProjectionTimeSeries(AnglesTimes, video, setup=setup, ReturnProjMat=False, ReturnBackProjs=False):
     if video.ndim != 3:  raise ValueError("video must be a 3D array.")
+    if ReturnProjMat and ReturnBackProjs:
+       raise ValueError("ReturnProjMat and ReturnBackProjs cannot both be True simultaneously.")
     AnglesTimes = list(AnglesTimes)  #  this will do nothing if it is already a list, but it turns into a list if it is a zip object
-    times = [] ;  projs = []  # projections will be collected here
+    times = [] ;  projs = []; backprojs = []   # stuff will be collected here
     A = [];  # if desired, the proj matrix will be collected here
     for k, tup in enumerate(AnglesTimes):  # k is the interpolated video index
        times.append(tup[1])
@@ -125,13 +128,18 @@ def ProjectionTimeSeries(AnglesTimes, video, setup=setup, ReturnProjMat=False):
     nrowsA = 0
     for k, tup in enumerate(AnglesTimes):
         A_i = ProjectionSubMatrix(tup[0], setup=setup)
-        projs.append( A_i@vid[k,:,:].reshape((A_i.shape[1],)) )
-        if ReturnProjMat:
+        proj = A_i@vid[k,:,:].reshape((A_i.shape[1],))
+        projs.append( proj )
+        if ReturnBackProjs:
+           backprojs.append( (A_i.T@proj).reshape((vid[k,:,:].shape))  )
+        elif ReturnProjMat:
           nrowsA += A_i.shape[0]
           A.append(A_i)
     if ReturnProjMat:
        A = np.array(A).reshape((nrowsA, A_i.shape[1]))
        return( (projs, A) )
+    elif ReturnBackProjs:
+       return( np.array(backprojs) )
     else:
        return A
 
@@ -229,14 +237,15 @@ def demo_dynamic(video, regparam=0.1):
    return x
 
 #%%    run demos
-lilvid = vid1[1121:1121+40,:,:]
 
+if __name__ == "__main__":
+   lilvid = vid1[1121:1121+40,:,:]
 
-x_static = demo_static(lilvid, regparam=0.02)
-x_dynamic = demo_dynamic(lilvid, regparam=0.05)
+   x_static = demo_static(lilvid, regparam=0.02)
+   x_dynamic = demo_dynamic(lilvid, regparam=0.05)
 
-plt.figure(); plt.imshow(lilvid[2,:,:],cmap='coolwarm');plt.colorbar();plt.title('frame 2, True');
-plt.figure(); plt.imshow(lilvid[7,:,:],cmap='coolwarm');plt.colorbar();plt.title('frame 7, True');
-plt.figure(); plt.imshow(lilvid[12,:,:],cmap='coolwarm');plt.colorbar();plt.title('frame 12, True');
-plt.figure(); plt.imshow(x_static.reshape((80,80)),cmap='coolwarm');plt.colorbar();plt.title('frame 7, static recon');
-plt.figure(); plt.imshow(x_dynamic.reshape((80,80)),cmap='coolwarm');plt.colorbar();plt.title('frames 2-12, dynamic recon');
+   plt.figure(); plt.imshow(lilvid[2,:,:],cmap='coolwarm');plt.colorbar();plt.title('frame 2, True');
+   plt.figure(); plt.imshow(lilvid[7,:,:],cmap='coolwarm');plt.colorbar();plt.title('frame 7, True');
+   plt.figure(); plt.imshow(lilvid[12,:,:],cmap='coolwarm');plt.colorbar();plt.title('frame 12, True');
+   plt.figure(); plt.imshow(x_static.reshape((80,80)),cmap='coolwarm');plt.colorbar();plt.title('frame 7, static recon');
+   plt.figure(); plt.imshow(x_dynamic.reshape((80,80)),cmap='coolwarm');plt.colorbar();plt.title('frames 2-12, dynamic recon');

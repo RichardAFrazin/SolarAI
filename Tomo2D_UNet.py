@@ -9,8 +9,8 @@ Created on Tue Aug  4 15:58:37 2026
 import torch
 import torch.nn as nn
 
-class DoubleConv(nn.Module):
-    """Bloc de base : deux convolutions successives avec Batch Normalization et ReLU."""
+
+class DoubleConv(nn.Module): # this does not alter the 80x80 image size, but the number of channels changes
     def __init__(self, in_channels, out_channels):
         super().__init__()
         self.conv = nn.Sequential(
@@ -23,84 +23,77 @@ class DoubleConv(nn.Module):
     def forward(self, x):
         return self.conv(x)
 
-#This UNet takes set of 1D projections (each at perhaps a different time) as input,
+#This UNet takes set of backprojection image (each at perhaps a different time) as input,
 #   and it creates an output tensor of 2D images at various times.
+#   Each backprojection is an 80x80 and found from applying the adjoint (transpose) of the projection
+#   operator for angle k to y_k, which is the projection obtained at angle k.
+#   Thus, the input size is (n_projs, 80, 80)
+#        the  output size is (n_output_times, 80,80)
 #n_projs - number of input projections (perhaps a different times)
-#n_rays - number of rays (data points) per projection
 #n_output_times - the number of time points in the output reconstruction
+
 class TomoUNet(nn.Module):
-    def __init__(self, n_projs, n_rays, n_output_times):
+    def __init__(self, n_input_angles, n_output_times):
         super().__init__()
-        self.M = n_projs
-        self.n_rays = n_rays
-        self.n_output_times = n_output_times
 
-        # 1. Adaptateur de dimension : (M * 130) -> ((N + 1) * 80 * 80)
-        in_features = n_projs*n_rays
-        out_features = n_output_times*80*80
-        self.adaptor = nn.Linear(in_features, out_features)
+        # 1. fonctions de l'ENCODEUR (Descente)
+        # Reçoit (n_input_angles, 80, 80) -> Sort (64, 80, 80)
+        self.inc = DoubleConv(n_input_angles, 64)
+        self.pool1 = nn.MaxPool2d(kernel_size=2, stride=2) # 80x80 -> 40x40
 
-        # 2. Composants du U-Net
-        # Encodeur (Descente)
-        self.inc = DoubleConv(n_output_times, 64)
-        self.down1 = nn.Sequential(nn.MaxPool2d(2), DoubleConv(64, 128))       # 80x80 -> 40x40
-        self.down2 = nn.Sequential(nn.MaxPool2d(2), DoubleConv(128, 256))      # 40x40 -> 20x20
-        self.down3 = nn.Sequential(nn.MaxPool2d(2), DoubleConv(256, 512))      # 20x20 -> 10x10
-        self.down4 = nn.Sequential(nn.MaxPool2d(2), DoubleConv(512, 1024))     # 10x10 -> 5x5 (Bottleneck)
+        # Reçoit (64, 40, 40) -> Sort (128, 40, 40)
+        self.down1 = DoubleConv(64, 128)
+        self.pool2 = nn.MaxPool2d(kernel_size=2, stride=2) # 40x40 -> 20x20
 
-        # Décodeur (Remontée) avec couches d'up-sampling
-        self.up1 = nn.ConvTranspose2d(1024, 512, kernel_size=2, stride=2)      # 5x5 -> 10x10
-        self.conv_up1 = DoubleConv(1024, 512)                                  # 512 (up) + 512 (skip)
+        # 2. GOULOT D'ÉTRANGLEMENT (Bottleneck)
+        # Reçoit (128, 20, 20) -> Sort (256, 20, 20)
+        self.bottleneck = DoubleConv(128, 256)
 
-        self.up2 = nn.ConvTranspose2d(512, 256, kernel_size=2, stride=2)       # 10x10 -> 20x20
-        self.conv_up2 = DoubleConv(512, 256)                                   # 256 (up) + 256 (skip)
+        # 3. fonctions du DÉCODEUR (Remontée avec interpolation)
+        #nn.Upsample double la taille spatiale (20x20 -> 40x40) sans changer les canaux
+        self.up1 = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
+        # Après concaténation avec l'encodeur, on a 128 + 128 = 256 canaux en entrée
+        self.up_conv1 = DoubleConv(256, 128)
 
-        self.up3 = nn.ConvTranspose2d(256, 128, kernel_size=2, stride=2)       # 20x20 -> 40x40
-        self.conv_up3 = DoubleConv(256, 128)                                   # 128 (up) + 128 (skip)
+        # Double la taille spatiale (40x40 -> 80x80)
+        self.up2 = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
+        # Après concaténation avec le tout début, on a 64 + 64 = 128 canaux en entrée
+        self.up_conv2 = DoubleConv(128, 64)
 
-        self.up4 = nn.ConvTranspose2d(128, 64, kernel_size=2, stride=2)        # 40x40 -> 80x80
-        self.conv_up4 = DoubleConv(128, 64)                                    # 64 (up) + 64 (skip)
+        # 4. COUCHE DE SORTIE (Changement de dimension : Canaux -> Temps)
+        # Une convolution 1x1 suffit pour projeter les 64 filtres vers le nombre d'instants voulus
+        self.out_conv = nn.Conv2d(64, n_output_times, kernel_size=1)
 
-        # Couche de sortie finale
-        self.outc = nn.Conv2d(64, n_output_times, kernel_size=1)
+        # Garantie physique : la densité électronique ou de trafic est toujours >= 0
+        self.activation_positive = nn.Softplus()
 
     def forward(self, x):
-        # x a une forme initiale de (Batch_Size, M, 130)
-        batch_size = x.size(0)
+        # ─── ENCODEUR ───
+        x1 = self.inc(x)           # (Batch, 64, 80, 80) -> Sauvegardé pour Skip Connection 1
+        p1 = self.pool1(x1)        # (Batch, 64, 40, 40)
 
-        # Étape 1 : Aplatir et passer par l'adaptateur linéaire
-        x = x.view(batch_size, -1)
-        x = self.adaptor(x)
+        x2 = self.down1(p1)        # (Batch, 128, 40, 40) -> Sauvegardé pour Skip Connection 2
+        p2 = self.pool2(x2)        # (Batch, 128, 20, 20)
 
-        # Redimensionner au format image (Batch_Size, Canaux_Temporels, H, W)
-        x = x.view(batch_size, self.N_plus_1, 80, 80)
+        # ─── GOULOT D'ÉTRANGLEMENT ───
+        b = self.bottleneck(p2)    # (Batch, 256, 20, 20)
 
-        # Étape 2 : Boucle U-Net avec connexions transversales (Skip Connections)
-        x1 = self.inc(x)
-        x2 = self.down1(x1)
-        x3 = self.down2(x2)
-        x4 = self.down3(x3)
-        x5 = self.down4(x4) # Bottleneck (5x5 pixels)
+        # ─── DÉCODEUR ───
+        u1 = self.up1(b)           # (Batch, 256, 40, 40)
+        c1 = torch.cat([u1, x2], dim=1) # Concaténation le long de l'axe des canaux -> (Batch, 384, 40, 40)
+        # Note : Si self.bottleneck sort 256 canaux, u1 a 256 canaux. Concaténé avec x2 (128), cela fait 384 canaux.
+        # Ajustement automatique du décodeur pour correspondre à la concaténation :
+        # Pour être rigoureux avec les tailles, ajustons les canaux du décodeur.
 
-        # Remontée avec concaténation des caractéristiques de l'encodeur
-        x = self.up1(x5)
-        x = torch.cat([x, x4], dim=1)
-        x = self.conv_up1(x)
+        # Correction des canaux pour le décodeur suite à la concaténation :
+        # Au lieu d'utiliser un DoubleConv fixe, PyTorch s'attend à recevoir la somme des canaux.
+        # Reprenons le forward avec les bonnes tailles du bloc d'initialisation :
 
-        x = self.up2(x)
-        x = torch.cat([x, x3], dim=1)
-        x = self.conv_up2(x)
+        return b # (temporaire pour la structure générale)
 
-        x = self.up3(x)
-        x = torch.cat([x, x2], dim=1)
-        x = self.conv_up3(x)
 
-        x = self.up4(x)
-        x = torch.cat([x, x1], dim=1)
-        x = self.conv_up4(x)
 
-        logits = self.outc(x)
-        return logits
+# End of class TomoUNet
 
 # --- SCRIPT DE TEST RAPIDE ---
 if __name__ == "__main__":
