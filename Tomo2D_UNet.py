@@ -53,19 +53,18 @@ class TomoUNet(nn.Module):
         #nn.Upsample double la taille spatiale (20x20 -> 40x40) sans changer les canaux
         self.up1 = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
         # Après concaténation avec l'encodeur, on a 128 + 128 = 256 canaux en entrée
-        self.up_conv1 = DoubleConv(256, 128)
+        self.up_conv1 = DoubleConv(384, 128)
 
         # Double la taille spatiale (40x40 -> 80x80)
         self.up2 = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
         # Après concaténation avec le tout début, on a 64 + 64 = 128 canaux en entrée
-        self.up_conv2 = DoubleConv(128, 64)
+        self.up_conv2 = DoubleConv(192, 64)
 
         # 4. COUCHE DE SORTIE (Changement de dimension : Canaux -> Temps)
         # Une convolution 1x1 suffit pour projeter les 64 filtres vers le nombre d'instants voulus
         self.out_conv = nn.Conv2d(64, n_output_times, kernel_size=1)
 
-        # Garantie physique : la densité électronique ou de trafic est toujours >= 0
-        self.activation_positive = nn.Softplus()
+        self.activation_positive = nn.Softplus() # Guarantee positivity.  Softplus(x) = log(1 + exp(x))
 
     def forward(self, x):
         # ─── ENCODEUR ───
@@ -81,15 +80,15 @@ class TomoUNet(nn.Module):
         # ─── DÉCODEUR ───
         u1 = self.up1(b)           # (Batch, 256, 40, 40)
         c1 = torch.cat([u1, x2], dim=1) # Concaténation le long de l'axe des canaux -> (Batch, 384, 40, 40)
-        # Note : Si self.bottleneck sort 256 canaux, u1 a 256 canaux. Concaténé avec x2 (128), cela fait 384 canaux.
-        # Ajustement automatique du décodeur pour correspondre à la concaténation :
-        # Pour être rigoureux avec les tailles, ajustons les canaux du décodeur.
+        d1 = self.up_conv1(c1)  # d1.shape = (Batch, 128, 40, 40)
 
-        # Correction des canaux pour le décodeur suite à la concaténation :
-        # Au lieu d'utiliser un DoubleConv fixe, PyTorch s'attend à recevoir la somme des canaux.
-        # Reprenons le forward avec les bonnes tailles du bloc d'initialisation :
+        u2 = self.up2(d1)  # u2.shape = (Batch, 128,80,80)
+        c2 = torch.cat([u2,x1] ,dim=1)  # c2.shape = (Batch, 192, 80, 80)
+        d2 = self.up_conv2(c2)     # (B, 64, 80, 80)
+        out = self.out_conv(d2)    # (B, n_output_times, 80, 80)
+        out = self.activation_positive(out)
 
-        return b # (temporaire pour la structure générale)
+        return out
 
 
 
