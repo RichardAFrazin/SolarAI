@@ -22,17 +22,19 @@ setup = {'sz': npix, 'n_ang': 26, 'n_rays': int(np.round(2*np.sqrt(2)*npix)) }
 
 
 #This calculates the matrix corresponding to the projection at input angle
-#  The intput angle is in radian units.
-#  angle = 0 corresponds to a horizontal projection with the screen parallel to the y-axis,
+#  angle - the intput angle is in radian units; any real number is ok.
+#    angle = 0 corresponds to a horizontal projection with the screen parallel to the y-axis,
 #        and the rays parallel to the x-axis.
 def ProjectionSubMatrix(angle, setup=setup):
-    if (angle < - np.pi) or (angle > np.pi):
-       raise ValueError("angle must between -pi and pi.")
     sz = setup['sz']  # Tamaño de la imagen (suponiendo que es cuadrada)
     M = setup['n_rays']  # Número de rayos por ángulo
     d_ray = np.sqrt(2) * sz / M  # Distancia entre rayos
     A_i = np.zeros((M, sz**2))
-
+    def PiMod(s):
+       t = s % (2*np.pi)
+       if t > np.pi: t -= 2*np.pi
+       return t
+    angle = PiMod(angle)
     #  These vertical and horizontal lines define the pixel boundaries.
     vertical_lines = np.linspace(-sz//2, sz//2, sz+1)
     horizontal_lines = vertical_lines

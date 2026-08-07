@@ -97,15 +97,13 @@ class TomoUNet(nn.Module):
 # --- SCRIPT DE TEST RAPIDE ---
 if __name__ == "__main__":
     # Paramètres de votre problème-jouet
-    M_angles = 20
-    detectors = 130
-    N_instants = 30 # N+1 vaudra donc 31 canaux
+    n_input_angles=11; n_output_times = 15
 
     # Instance du modèle
-    model = TomoUNet(M=M_angles, n_rays=detectors, N_plus_1=N_instants + 1)
+    model = TomoUNet(n_input_angles, n_output_times)
 
     # Simulation d'un lot (batch) de 4 exemples de données d'entrée
-    donnees_test = torch.rand(4, M_angles, detectors)
+    donnees_test = torch.rand(4, n_input_angles, 80, 80)
 
     # Passage dans le modèle
     prediction = model(donnees_test)
