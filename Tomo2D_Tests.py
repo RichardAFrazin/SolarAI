@@ -186,7 +186,7 @@ def ViewResults(sdex, model, samplist):
    targ   = samplist[sdex][1]
    n_ang = len(obs)
    angs = np.linspace(0, 2*np.pi*(n_ang-1)/n_ang, n_ang)
-
+   use StaticReconstruction function
 
 
 
