@@ -180,7 +180,7 @@ for k in range(vid.shape[0]):
 vid1 = vid[:,cen1[0]-npix//2:cen1[0]+npix//2, cen1[1]-npix//2:cen1[1]+npix//2]
 vid2 = vid[:,cen2[0]-npix//2:cen2[0]+npix//2, cen2[1]-npix//2:cen2[1]+npix//2]
 
-#%  Codes for Demos
+#%%  Codes for Demos
 
 #This creates a representation of the $\nabla$ operator in sparse matrix format for regularization.
 #The solution being regularized corresponds to an N-by-N image.
@@ -197,46 +197,82 @@ def Nabla_sparse(N):
     Nabla = sp.vstack([Dx, Dy] ,format='csr')
     return Nabla
 
+def ID_sparse(N):  # this image is assume to be NxN pixels
+   return sp.eye(N*N, format='csr')
+
+#This performs a regularized static reconstruction via least-squares solution
+#video - np.array of shape (n_frames, 80. 80)
+#ProjMats - list of projection matrices corresponding to the observed angles
+#    can be in a scipy.sparse format, but not a Torch.tensor
+#ProjTimes - list of times (video frame units), must be >= 0 and <= n_frames-1
+#   Note:  len(ProjMat) must be equal to len(ProjTimes)
+#RegFcn - either None, 'Nabla_sparse', or 'ID_sparse'
+#regparam - positive multiplier of the regularization matrix
+#ShowSolver - set to True to see the output of the least-squares solver
+def StaticReconstruction(video, ProjMats, ProjTimes, RegFcn='Nabla_sparse', regparam=0.01, ShowSolver=False):
+   if RegFcn is not None:
+      if RegFcn not in ['ID_sparse','Nabla_sparse']:
+         raise ValueError("Invalid RegFcn string.")
+   if len(ProjMats) != len(ProjTimes):
+      raise ValueError("The input lists ProjMats and ProjTimes must have the same length.")
+   if video.ndim != 3:  raise ValueError("video must be a 3D array.")
+   n_frames = video.shape[0]
+   ProjTimes = np.array(ProjTimes)
+   if not all(ProjTimes >=0.) and all(ProjTimes <= n_frames-1):
+      raise ValueError("All ProjTimes values must be >= 0 and <= n_frames-1.")
+
+   projs = []
+   vid = VideoInterpolate(ProjTimes, video)
+   for k in range(len(ProjTimes)):
+      projs.append( ProjMats[k]@vid[k,:,:].reshape((80*80,)) )
+      if k == 0 :
+         A = sp.csr_matrix(ProjMats[0])
+      else:
+         A = sp.vstack( (A, sp.csr_matrix(ProjMats[k])) )
+   projs = np.array(projs).reshape( (len(projs[0])*len(projs),) )
+
+   Reg = None  # regularization matrix
+   if RegFcn == 'Nabla_sparse':
+      Reg = regparam*Nabla_sparse(80)
+   elif RegFcn == 'ID_sparse':
+      Reg = regparam*ID_sparse(80)
+   if Reg is not None:
+      A = sp.vstack((A, Reg))
+      projs = np.hstack( (projs, np.zeros(Reg.shape[0])) )
+
+   # iterative least-squares solution via the LSMR method
+   LSMR = sp.linalg.lsmr
+   x, istop, itn, normr, normar, norma, conda, normx = LSMR(A, projs,
+      atol=1.e-6, btol=1.e-6, maxiter=100, show=ShowSolver)  # atol - matrix resid, btol - y resid
+
+   return x.reshape((80,80))
+
+
 def demo_static(video, regparam=0.01):
+   print("Least-Squares Reconstruction of a static object.")
    n_ang = 31
    angs = np.linspace(0, np.pi*(n_ang-1)/n_ang , n_ang)
    #times = np.linspace(0, 38.5, n_ang)
    times = 7*np.ones((n_ang,))   #frame number 20
-   AngTimes = list(zip(angs, times))
-   projs, Mat = ProjectionTimeSeries(AngTimes, video, setup=setup, ReturnProjMat=True)
+   ProjMats = []
 
-   projs = np.array(projs).reshape((len(projs)*len(projs[0],))) #convert from a list of vectors into a big vector
-   Mat = sp.csr_matrix(Mat)  # put into csr format.  The inverse is the .toarray() method.
-   #regparam = 0.001  # regularization parameter.
-   Reg = Nabla_sparse(setup['sz'])  # regularization matrix
-   Mat = sp.vstack([Mat, regparam*Reg], format='csr')  #   #stack system matrix with reg matrix
-   y = np.hstack([projs, np.zeros((Reg.shape[0],))])  # augment 'y' vector
-
-   # iterative least-squares solution via the LSMR method
-   LSMR = sp.linalg.lsmr
-   x, istop, itn, normr, normar, norma, conda, normx = LSMR(Mat, y,
-      atol=1.e-6, btol=1.e-6, maxiter=100, show=True)  # atol - matrix resid, btol - y resid
-   return x
+   for ang in angs:
+      ProjMats.append( sp.csr_matrix(ProjectionSubMatrix(ang, setup=setup)) )
+   x = StaticReconstruction(video, ProjMats, times, RegFcn='Nabla_sparse', regparam=regparam, ShowSolver=False);
+   return x.reshape((80,80))
 
 def demo_dynamic(video, regparam=0.1):
+   print("Static Least-Squares Reconstruction of a time-dependent object.")
    n_ang = 31
    angs = np.linspace(0, np.pi*(n_ang-1)/n_ang , n_ang)
    times = np.linspace(2, 12, n_ang)
-   AngTimes = list(zip(angs, times))
-   projs, Mat = ProjectionTimeSeries(AngTimes, video, setup=setup, ReturnProjMat=True)
+   ProjMats = []
+   for ang in angs:
+      ProjMats.append( sp.csr_matrix(ProjectionSubMatrix(ang, setup=setup)) )
+   x = StaticReconstruction(video, ProjMats, times, RegFcn='Nabla_sparse', regparam=regparam, ShowSolver=False);
+   return x.reshape((80,80))
 
-   projs = np.array(projs).reshape((len(projs)*len(projs[0],))) #convert from a list of vectors into a big vector
-   Mat = sp.csr_matrix(Mat)  # put into csr format.  The inverse is the .toarray() method.
-   #regparam = 0.001  # regularization parameter.
-   Reg = Nabla_sparse(setup['sz'])  # regularization matrix
-   Mat = sp.vstack([Mat, regparam*Reg], format='csr')  #   #stack system matrix with reg matrix
-   y = np.hstack([projs, np.zeros((Reg.shape[0],))])  # augment 'y' vector
 
-   # iterative least-squares solution via the LSMR method
-   LSMR = sp.linalg.lsmr
-   x, istop, itn, normr, normar, norma, conda, normx = LSMR(Mat, y,
-      atol=1.e-6, btol=1.e-6, maxiter=100, show=True)  # atol - matrix resid, btol - y resid
-   return x
 
 #%%    run demos
 
@@ -249,5 +285,5 @@ if __name__ == "__main__":
    plt.figure(); plt.imshow(lilvid[2,:,:],cmap='coolwarm');plt.colorbar();plt.title('frame 2, True');
    plt.figure(); plt.imshow(lilvid[7,:,:],cmap='coolwarm');plt.colorbar();plt.title('frame 7, True');
    plt.figure(); plt.imshow(lilvid[12,:,:],cmap='coolwarm');plt.colorbar();plt.title('frame 12, True');
-   plt.figure(); plt.imshow(x_static.reshape((80,80)),cmap='coolwarm');plt.colorbar();plt.title('frame 7, static recon');
-   plt.figure(); plt.imshow(x_dynamic.reshape((80,80)),cmap='coolwarm');plt.colorbar();plt.title('frames 2-12, dynamic recon');
+   plt.figure(); plt.imshow(x_static,cmap='coolwarm');plt.colorbar();plt.title('frame 7, static recon');
+   plt.figure(); plt.imshow(x_dynamic,cmap='coolwarm');plt.colorbar();plt.title('frames 2-12, dynamic recon');

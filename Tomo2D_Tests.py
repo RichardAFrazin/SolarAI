@@ -152,9 +152,9 @@ if __name__ == "__main__":
     # Initialization.  498 samples with TrainingDataSet(16,25,[3.,13.],stride=6)
     samp = TrainingDataSet(16,25,[3.,13.],stride=6)  #list of samples
     samp_train = samp[:450]
-    samp_val = samp[450:]
+    samp_validation = samp[450:]
     dataset_train = TomoDataset(samp_train)
-    dataset_val = TomoDataset(samp_val)
+    dataset_val = TomoDataset(samp_validation)
     dataloader_train = DataLoader(dataset_train, batch_size=10, shuffle=True)
     dataloader_val = DataLoader(dataset_val, batch_size=10, shuffle=False)
 
@@ -176,10 +176,26 @@ if __name__ == "__main__":
               f"Training loss : {loss_train:.6f} | "
               f"Validation : {loss_val:.6f}")
 
-#%%  look at a reconstructions from the validation set.
+#%% Look at results from the validation set.  See TrainingDataSet function to see how samples are created.
+# sdex - sample index
+# model - the UNet model
+# samplist - list of samples, each element of which is an (observation, target) tuple.
+
+def ViewResults(sdex, model, samplist):
+   obs   = samplist[sdex][0]
+   targ   = samplist[sdex][1]
+   n_ang = len(obs)
+   angs = np.linspace(0, 2*np.pi*(n_ang-1)/n_ang, n_ang)
+
+
+
+
+   return None
+
+
 snum = 42
-truset = samp_val[snum][1]  # truth images
-bprset = torch.from_numpy(samp_val[snum][0]).float().unsqueeze(0).to(device)  # input back projections
+truset = samp_validation[snum][1]  # truth images
+bprset = torch.from_numpy(samp_validation[snum][0]).float().unsqueeze(0).to(device)  # input back projections
 recset = (model(bprset).detach().cpu().numpy()).squeeze(axis=0)
 
 imdx = [0, 3, 6, 9, 12, 15]
