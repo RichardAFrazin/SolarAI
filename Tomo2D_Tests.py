@@ -49,20 +49,19 @@ def TrainingDataSet(nFramesOut, nAnglesObs, StartEndObs, stride=None, video=PU.v
 
    #The projection angles are the same for each sample, so only compute them once
    angles = np.linspace(0, np.pi*nAnglesObs/(nAnglesObs-1), nAnglesObs)
+   times =  np.linspace(StartEndObs[0], StartEndObs[1], nAnglesObs)
+
    projmats = []
    for angle in angles:
       densemat = PU.ProjectionSubMatrix(angle, setup=PU.setup)  # use sparse format for speed
       projmats.append(CSR(densemat))
-
    samples = []  # list of input/output tuples
-
    VideoEnd = False # True signals the end of the video
    k = -1  #sample number
    while not VideoEnd:
       k += 1
       truthvid = video[k*stride : k*stride + nFramesOut, :, :]  # truth video
       bpvid = []  # backprojection video
-      times =  np.linspace(StartEndObs[0], StartEndObs[1], nAnglesObs)
       #  get the portion of truthvid corresponding to the observation times
       vidobs = PU.VideoInterpolate(times, truthvid)  # temporal interpolation
       for i in range(vidobs.shape[0]):
@@ -137,7 +136,62 @@ def validate_one_epoch(model, dataloader_val, criterion, device):
     return running_loss / len(dataloader_val.dataset)
 
 
-#%% 3. Exemple de script principal pour lancer l'entraînement
+def TrainModel(model, num_epochs=50):
+    num_epochs = num_epochs
+    for epoch in range(num_epochs):
+        loss_train = train_one_epoch(model, dataloader_train, criterion, optimizer, device)
+        loss_val = validate_one_epoch(model, dataloader_val, criterion, device)
+
+        print(f"Epoch [{epoch+1}/{num_epochs}] -> "
+              f"Training loss : {loss_train:.6f} | "
+              f"Validation : {loss_val:.6f}")
+    return model
+
+# fnameWpath is the filename with the path included.  Recommended suffix: .pt
+def SaveModelWeights(model, fnameWpath):
+   return torch.save(model.state_dict(), fnameWpath)
+def LoadModelWeights(model, fnameWpath):
+   return model.load_state_dict(torch.load(fnameWpath, weights_only=True))
+
+
+#%% Look at results from the validation set.  See TrainingDataSet function to see how samples are created.
+# This also carries out a static reconstruction in order to compare to the dynamic results
+# sdex - sample index
+# model - the UNet model
+# samplist - list of samples, each element of which is an (observation, target) tuple.
+# regparam - regularization paramter for the static reconstruction
+# ProjMats - Projection Matrices need for comparison to static reconstruction
+#     if not None, they should be supplied in a list
+def ViewResults(sdex, model, samplist, StartEndObs, regparam=0.05, ProjMats=None):
+
+   nAnglesObs = len(samplist[0][0])
+   angles = np.linspace(0, 2*np.pi*(nAnglesObs-1)/nAnglesObs, nAnglesObs)
+   obs   = samplist[sdex][0]  # observations (input)
+   targ   = samplist[sdex][1] # target video frames (output)
+   times =  np.linspace(StartEndObs[0], StartEndObs[1], nAnglesObs)  #observation times
+   if ProjMats is not None:
+      ProjMats = []
+      for ang in angles:
+         ProjMats.append( PU.ProjectionSubMatrix(ang, setup=PU.setup) )
+
+   x_static = PU.StaticReconstruction(targ, ProjMats, times, RegFcn='Nabla_sparse', regparam=regparam, ShowSolver=False)
+   x_true = PU.VideoInterpolate( 0.5*(StartEndObs[0] + StartEndObs[1]), targ)
+
+   model.eval()  #disable dropout (enabled by default) for deterministic evaluation
+   with torch.no_grad():  # reconstructed video
+      vid_UNet = model( torch.from_nympy(obs).float().unsqueeze(0).to(device) )
+      vid_UNet = (vid_UNet.detach().cpu().numpy()).squeeze(axis=0)
+   x_UNet = PU.VideoInterpolate( 0.5*(StartEndObs[0] + StartEndObs[1]), vid_UNet)
+
+   image_out = np.hstack((x_true, x_UNet, x_static));
+   rms = [np.std(x_UNet-x_true), np.std(x_static - x_true)]
+   print(f"RMS errors: UNet {rms[0]}, static {rms[1]}.")
+   plt.imshow(image_out, cmap='coolwarm');plt.colorbar();
+
+   return image_out
+
+
+#%% 3. training script
 if __name__ == "__main__":
     # Détection du GPU (CUDA / MPS pour Mac) ou CPU
     if torch.cuda.is_available():
@@ -164,42 +218,4 @@ if __name__ == "__main__":
     # Fonction de perte (MSE) et Optimiseur (Adam)
     criterion = nn.MSELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
-
-#%%
-   # Boucle sur plusieurs époques
-    num_epochs = 100
-    for epoch in range(num_epochs):
-        loss_train = train_one_epoch(model, dataloader_train, criterion, optimizer, device)
-        loss_val = validate_one_epoch(model, dataloader_val, criterion, device)
-
-        print(f"Epoch [{epoch+1}/{num_epochs}] -> "
-              f"Training loss : {loss_train:.6f} | "
-              f"Validation : {loss_val:.6f}")
-
-#%% Look at results from the validation set.  See TrainingDataSet function to see how samples are created.
-# sdex - sample index
-# model - the UNet model
-# samplist - list of samples, each element of which is an (observation, target) tuple.
-
-def ViewResults(sdex, model, samplist):
-   obs   = samplist[sdex][0]
-   targ   = samplist[sdex][1]
-   n_ang = len(obs)
-   angs = np.linspace(0, 2*np.pi*(n_ang-1)/n_ang, n_ang)
-   use StaticReconstruction function
-
-
-
-   return None
-
-
-snum = 42
-truset = samp_validation[snum][1]  # truth images
-bprset = torch.from_numpy(samp_validation[snum][0]).float().unsqueeze(0).to(device)  # input back projections
-recset = (model(bprset).detach().cpu().numpy()).squeeze(axis=0)
-
-imdx = [0, 3, 6, 9, 12, 15]
-for dx in imdx:
-   im = np.vstack((truset[dx,:,:],recset[dx,:,:]))
-   plt.figure(dx)
-   plt.imshow(im, cmap='coolwarm');plt.colorbar()
+    model = TrainModel(model, num_epochs=50)
