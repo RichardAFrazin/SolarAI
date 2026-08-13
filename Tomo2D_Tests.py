@@ -6,6 +6,7 @@ Created on Fri Aug  7 13:05:24 2026
 @author: rfrazin
 """
 
+import os
 import numpy as np
 from scipy.sparse import csr_matrix as CSR
 import matplotlib.pyplot as plt
@@ -15,6 +16,8 @@ import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm   # training progress bar display
+import glob
+import imageio.v2 as imageio
 
 
 
@@ -136,8 +139,8 @@ def validate_one_epoch(model, dataloader_val, criterion, device):
     return running_loss / len(dataloader_val.dataset)
 
 
-def TrainModel(model, num_epochs=50):
-    num_epochs = num_epochs
+def TrainModel(model, dataloader_train, dataloader_val,
+               criterion, optimizer, device, num_epochs=50):
     for epoch in range(num_epochs):
         loss_train = train_one_epoch(model, dataloader_train, criterion, optimizer, device)
         loss_val = validate_one_epoch(model, dataloader_val, criterion, device)
@@ -160,7 +163,7 @@ def SaveCheckpoint(model, optimizer, epoch, loss, fnameWpath):
     'optimizer_state_dict': optimizer.state_dict(),
     'loss': loss,}, fnameWpath)
     return None
-def LoadCheckpoint(model, fnameWpath):
+def LoadCheckpoint(model, optimizer, fnameWpath):
      checkpoint = torch.load(fnameWpath, weights_only=True)
      model.load_state_dict(checkpoint['model_state_dict'])
      model.eval()  # safe evaluation practice
@@ -177,7 +180,7 @@ def LoadCheckpoint(model, fnameWpath):
 # regparam - regularization paramter for the static reconstruction
 # ProjMats - Projection Matrices need for comparison to static reconstruction
 #     if not None, they should be supplied in a list
-def ViewResults(sdex, model, samplist, StartEndObs, regparam=0.05, ProjMats=None):
+def ViewResults(sdex, model, samplist, StartEndObs, regparam=0.1, ProjMats=None, device="cuda"):
 
    nAnglesObs = len(samplist[0][0])
    angles = np.linspace(0, np.pi*(nAnglesObs-1)/nAnglesObs, nAnglesObs)
@@ -201,14 +204,48 @@ def ViewResults(sdex, model, samplist, StartEndObs, regparam=0.05, ProjMats=None
    image_out = np.hstack((x_true, x_UNet, x_static));
    rms = [np.std(x_UNet-x_true), np.std(x_static - x_true)]
    print(f"RMS errors: UNet {rms[0]}, static {rms[1]}.")
-   plt.imshow(image_out, cmap='coolwarm');plt.colorbar();
+   plt.figure();
+   im = plt.imshow(image_out, cmap='coolwarm');
+   plt.colorbar(im, fraction=0.02, pad=0.04);
+   for text, px_pos in zip(["True", "UNet", "Reg. LstSqu"], [40, 120, 200]):
+       plt.text(px_pos, -5, text, fontsize=10, ha='center', weight='bold')
 
    return image_out
 
+#%%
+def SaveViewResultsOnDisk(model, samplist, StartEndObs, ProjMats=None, output_dir="video_frames", device="cuda"):
+    os.makedirs(output_dir, exist_ok=True)
+    plt.ioff() # Évite d'ouvrir des fenêtres pop-up qui saturent l'écran
+
+    print(f"Saving the frames to '{output_dir}'...")
+    for sdex in range(len(samplist)):
+        _ = ViewResults(sdex, model, samplist, StartEndObs, regparam=0.1, ProjMats=ProjMats, device=device)
+
+        # Sauvegarde au format PNG ou JPG avec un index fixe à 3 chiffres (000, 001, 002...)
+        plt.savefig(f"{output_dir}/frame_{sdex:03d}.png", bbox_inches='tight', dpi=150)
+        plt.close() # Nettoie la mémoire RAM immédiatement
+    plt.ion()
+    return None
+
+
+def CompileImagesToVideo(input_dir="video_frames", output_filename="UNet_results.gif", fps=3):
+    files = sorted(glob.glob(f"{input_dir}/frame_*.png"))  #  glob.glob enables wildcard characters in a directory search
+    if not files:
+        print(f"Not matching files found in {input_dir}")
+        return
+
+    # 2. Lire les images sur le disque
+    images = [imageio.imread(f) for f in files]
+
+    # 3. Sauvegarder le fichier final (.gif ou .mp4 selon l'extension choisie)
+    print(f"Création du fichier {output_filename}...")
+    # imageio gère automatiquement le format .gif ou .mp4 selon le nom
+    imageio.mimsave(output_filename, images, fps=fps)
+    print("Video created and saved.")
 
 #%% 3. training script
 if __name__ == "__main__":
-    # Détection du GPU (CUDA / MPS pour Mac) ou CPU
+
     if torch.cuda.is_available():
         device = torch.device("cuda")
     else:
@@ -216,21 +253,33 @@ if __name__ == "__main__":
         kbd = input("cuda device not found.  Resorting to CPU. Press 'c' to continue.")
         if kbd.lower() != "c" : exit()
         else: pass
-    print(f"Using {device} device for training.")
+    print(f"Using {device} device.")
 
-    # Initialization.  498 samples with TrainingDataSet(16,25,[3.,13.],stride=6)
-    samp = TrainingDataSet(16,25,[3.,13.],stride=6)  #list of samples
-    samp_train = samp[:450]
-    samp_validation = samp[450:]
-    dataset_train = TomoDataset(samp_train)
-    dataset_val = TomoDataset(samp_validation)
-    dataloader_train = DataLoader(dataset_train, batch_size=10, shuffle=True)
-    dataloader_val = DataLoader(dataset_val, batch_size=10, shuffle=False)
+    inp = input("If you want to build the UNet and train it, type 'B'. If you want to work with the trained model to make images and videos, type 'O'.")
+    if inp.upper() == 'B':
+       # Initialization.  498 samples with TrainingDataSet(16,25,[3.,13.],stride=6)
+       samp = TrainingDataSet(16,25,[3.,13.],stride=6)  #list of samples
+       samp_train = samp[:450]
+       samp_validation = samp[450:]
+       dataset_train = TomoDataset(samp_train)
+       dataset_val = TomoDataset(samp_validation)
+       dataloader_train = DataLoader(dataset_train, batch_size=10, shuffle=True)
+       dataloader_val = DataLoader(dataset_val, batch_size=10, shuffle=False)
+       model = UN.TomoUNet(n_input_angles=25, n_output_times=16).to(device)
+       criterion = nn.MSELoss()
+       optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+       model = TrainModel(model, dataloader_train, dataloader_val,
+                          criterion, optimizer, device, num_epochs=50)
+    elif inp.upper() == 'O':
+      print("This assumes the UNet is in memory as 'model', among other things.")
+      nAnglesObs = 25; StartEndObs  = [3.,13.]
+      samp_validation_fine = TrainingDataSet(16, nAnglesObs, StartEndObs, stride=1, video=PU.vid1[2687:])
+      angles = np.linspace(0, np.pi*(nAnglesObs-1)/nAnglesObs, nAnglesObs)
+      ProjMats = []
+      for ang in angles:
+         ProjMats.append( CSR(PU.ProjectionSubMatrix(ang, setup=PU.setup)) )
+      SaveViewResultsOnDisk(model, samp_validation_fine, StartEndObs, ProjMats=ProjMats, output_dir="video_frames", device="cuda")
+      CompileImagesToVideo(input_dir="video_frames", output_filename="UNet_results.gif", fps=3)
 
-    # Initialisation du modèle (25 angles d'entrée, 16 instants de sortie)
-    model = UN.TomoUNet(n_input_angles=25, n_output_times=16).to(device)
 
-    # Fonction de perte (MSE) et Optimiseur (Adam)
-    criterion = nn.MSELoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
-    model = TrainModel(model, num_epochs=50)
+    else: exit()

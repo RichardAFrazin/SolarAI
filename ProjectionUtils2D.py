@@ -21,6 +21,25 @@ mp4file = "highway.mp4"; cen1 = (200,381); cen2 = (200, 262); npix=80
 setup = {'sz': npix, 'n_ang': 26, 'n_rays': int(np.round(2*np.sqrt(2)*npix)) }
 
 
+#this uses SciPy's Akima1DInterpolator to evaluate a video at times between the frame numbers
+#  video - the video to be evalued.  The first dimension is the frames. E.g., (3000, 256,256) for
+#
+#  times specifies the frame numbers, or fractions thereof, at which the video will be evaluated.
+#     times can be a single float or integer, list or 1D array of times.
+#
+def VideoInterpolate(times, video):
+   tt = np.atleast_1d(times)  # converts times to an np.array
+   if video.ndim != 3:
+      raise ValueError(f"Video shape is {video.shape}.  Video must be a 3D array.")
+   if not ( all(tt >= 0.) and all(tt <= video.shape[0]-1) ):
+      raise ValueError(f"Input time = {tt}.  All times must be at least zero and less than the (number of frames in the video)-1.")
+   frames = np.arange(video.shape[0])
+   interpolator = Akima(frames, video, axis=0)
+   res = interpolator(tt)
+   if np.isscalar(times):  # drop the unwanted dimension from the output
+      return(res[0])
+   return( res )
+
 #This calculates the matrix corresponding to the projection at input angle
 #  angle - the intput angle is in radian units; any real number is ok.
 #    angle = 0 corresponds to a horizontal projection with the screen parallel to the y-axis,
@@ -89,24 +108,6 @@ def ProjectionMatrix(setup=setup):
     A = np.array(A).reshape((nrowsA, A_i.shape[1]))
     return(A)
 
-#this uses SciPy's Akima1DInterpolator to evaluate a video at times between the frame numbers
-#  video - the video to be evalued.  The first dimension is the frames. E.g., (3000, 256,256) for
-#
-#  times specifies the frame numbers, or fractions thereof, at which the video will be evaluated.
-#     times can be a single float or integer, list or 1D array of times.
-#
-def VideoInterpolate(times, video):
-   tt = np.atleast_1d(times)  # converts times to an np.array
-   if video.ndim != 3:
-      raise ValueError(f"Video shape is {video.shape}.  Video must be a 3D array.")
-   if not ( all(tt >= 0.) and all(tt <= video.shape[0]-1) ):
-      raise ValueError(f"Input time = {tt}.  All times must be at least zero and less than the (number of frames in the video)-1.")
-   frames = np.arange(video.shape[0])
-   interpolator = Akima(frames, video, axis=0)
-   res = interpolator(tt)
-   if np.isscalar(times):  # drop the unwanted dimension from the output
-      return(res[0])
-   return( res )
 
 #This returns the set of projections corresponds to a given set of tuples, specified in the
 #  in AnglesTimes input variable, which is a list of tuples in the form (time, angle).
