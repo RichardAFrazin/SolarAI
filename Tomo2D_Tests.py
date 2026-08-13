@@ -149,10 +149,25 @@ def TrainModel(model, num_epochs=50):
 
 # fnameWpath is the filename with the path included.  Recommended suffix: .pt
 def SaveModelWeights(model, fnameWpath):
-   return torch.save(model.state_dict(), fnameWpath)
+    torch.save(model.state_dict(), fnameWpath)
+    return None
 def LoadModelWeights(model, fnameWpath):
    return model.load_state_dict(torch.load(fnameWpath, weights_only=True))
-
+def SaveCheckpoint(model, optimizer, epoch, loss, fnameWpath):
+    torch.save({
+    'epoch': epoch,
+    'model_state_dict': model.state_dict(),
+    'optimizer_state_dict': optimizer.state_dict(),
+    'loss': loss,}, fnameWpath)
+    return None
+def LoadCheckpoint(model, fnameWpath):
+     checkpoint = torch.load(fnameWpath, weights_only=True)
+     model.load_state_dict(checkpoint['model_state_dict'])
+     model.eval()  # safe evaluation practice
+     optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+     epoch = checkpoint['epoch']
+     loss = checkpoint['loss']
+     return (model,optimizer, epoch, loss)
 
 #%% Look at results from the validation set.  See TrainingDataSet function to see how samples are created.
 # This also carries out a static reconstruction in order to compare to the dynamic results
@@ -165,11 +180,11 @@ def LoadModelWeights(model, fnameWpath):
 def ViewResults(sdex, model, samplist, StartEndObs, regparam=0.05, ProjMats=None):
 
    nAnglesObs = len(samplist[0][0])
-   angles = np.linspace(0, 2*np.pi*(nAnglesObs-1)/nAnglesObs, nAnglesObs)
+   angles = np.linspace(0, np.pi*(nAnglesObs-1)/nAnglesObs, nAnglesObs)
    obs   = samplist[sdex][0]  # observations (input)
    targ   = samplist[sdex][1] # target video frames (output)
    times =  np.linspace(StartEndObs[0], StartEndObs[1], nAnglesObs)  #observation times
-   if ProjMats is not None:
+   if ProjMats is None:   # get the projection matrices
       ProjMats = []
       for ang in angles:
          ProjMats.append( PU.ProjectionSubMatrix(ang, setup=PU.setup) )
@@ -179,7 +194,7 @@ def ViewResults(sdex, model, samplist, StartEndObs, regparam=0.05, ProjMats=None
 
    model.eval()  #disable dropout (enabled by default) for deterministic evaluation
    with torch.no_grad():  # reconstructed video
-      vid_UNet = model( torch.from_nympy(obs).float().unsqueeze(0).to(device) )
+      vid_UNet = model( torch.from_numpy(obs).float().unsqueeze(0).to(device) )
       vid_UNet = (vid_UNet.detach().cpu().numpy()).squeeze(axis=0)
    x_UNet = PU.VideoInterpolate( 0.5*(StartEndObs[0] + StartEndObs[1]), vid_UNet)
 
