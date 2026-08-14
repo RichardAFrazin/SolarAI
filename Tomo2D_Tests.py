@@ -214,16 +214,28 @@ def ViewResults(sdex, model, samplist, StartEndObs, regparam=0.1, ProjMats=None,
 
 #%%
 def SaveViewResultsOnDisk(model, samplist, StartEndObs, ProjMats=None, output_dir="video_frames", device="cuda"):
+    print("Warning: This closes all figures!")
     os.makedirs(output_dir, exist_ok=True)
     plt.ioff() # Évite d'ouvrir des fenêtres pop-up qui saturent l'écran
 
     print(f"Saving the frames to '{output_dir}'...")
+
+    # Dimensions exactes pour obtenir 900 x 350 pixels à 150 DPI
+    target_width_inches = 900 / 150  # 6.0
+    target_height_inches = 350 / 150 # 2.333333...
+
     for sdex in range(len(samplist)):
+        fig = plt.figure(figsize=(target_width_inches, target_height_inches))
+        # Optionnel mais recommandé : configurer une géométrie d'axes fixe dans la figure
+        # [gauche, bas, largeur, hauteur] en fractions de la figure (de 0 à 1)
+        # Cela laisse 15% de marge à gauche/bas pour les légendes sans changer la taille globale
+        ax = fig.add_axes([0.15, 0.15, 0.75, 0.75])
+
         _ = ViewResults(sdex, model, samplist, StartEndObs, regparam=0.1, ProjMats=ProjMats, device=device)
 
         # Sauvegarde au format PNG ou JPG avec un index fixe à 3 chiffres (000, 001, 002...)
-        plt.savefig(f"{output_dir}/frame_{sdex:03d}.png", bbox_inches='tight', dpi=150)
-        plt.close() # Nettoie la mémoire RAM immédiatement
+        plt.savefig(f"{output_dir}/frame_{sdex:03d}.png", dpi=150)
+        plt.close('all') # Nettoie la mémoire RAM immédiatement
     plt.ion()
     return None
 
