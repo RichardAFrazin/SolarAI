@@ -15,6 +15,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.interpolate import Akima1DInterpolator as Akima
 import scipy.sparse as sp
+import torch
 import cv2
 
 mp4file = "highway.mp4"; cen1 = (200,381); cen2 = (200, 262); npix=80
@@ -169,19 +170,8 @@ def Loadmp4(filename=mp4file):
    cap.release()
    return(np.array(frames))
 
-lgvid = Loadmp4(); #lgvid has shape (3000,720,1280)
-vid = []
-for k in range(lgvid.shape[0]):
-   vid.append( rebin2Darray(lgvid[k,:,:],(360,640))  )
-vid = np.array(vid)
-del(lgvid)
-#normpix = (199,430) # a pixel on the white line
-for k in range(vid.shape[0]):
-   vid[k,:,:] /= vid[k,:,:].max()
-vid1 = vid[:,cen1[0]-npix//2:cen1[0]+npix//2, cen1[1]-npix//2:cen1[1]+npix//2]
-vid2 = vid[:,cen2[0]-npix//2:cen2[0]+npix//2, cen2[1]-npix//2:cen2[1]+npix//2]
 
-#%%  Codes for Demos
+#%%  Least-squares solution stuff
 
 #This creates a representation of the $\nabla$ operator in sparse matrix format for regularization.
 #The solution being regularized corresponds to an N-by-N image.
@@ -210,7 +200,7 @@ def ID_sparse(N):  # this image is assume to be NxN pixels
 #RegFcn - either None, 'Nabla_sparse', or 'ID_sparse'
 #regparam - positive multiplier of the regularization matrix
 #ShowSolver - set to True to see the output of the least-squares solver
-def StaticReconstruction(video, ProjMats, ProjTimes, RegFcn='Nabla_sparse', regparam=0.01, ShowSolver=False):
+def StaticReconstruction(video, ProjMats, ProjTimes, RegFcn='Nabla_sparse', regparam=0.01, UseTorch=False, ShowSolver=False):
    if RegFcn is not None:
       if RegFcn not in ['ID_sparse','Nabla_sparse']:
          raise ValueError("Invalid RegFcn string.")
@@ -241,12 +231,54 @@ def StaticReconstruction(video, ProjMats, ProjTimes, RegFcn='Nabla_sparse', regp
       A = sp.vstack((A, Reg))
       projs = np.hstack( (projs, np.zeros(Reg.shape[0])) )
 
-   # iterative least-squares solution via the LSMR method
-   LSMR = sp.linalg.lsmr
-   x, istop, itn, normr, normar, norma, conda, normx = LSMR(A, projs,
-      atol=1.e-6, btol=1.e-6, maxiter=100, show=ShowSolver)  # atol - matrix resid, btol - y resid
+   if UseTorch: # apply ConjGrad in PyTorch to get the least-squares solution
+      A = A.tocsr()  # Make sure it's in sp.CSR format
+      A_torch = torch.sparse_csr_tensor(  # put it on the GPU
+            crow_indices=torch.from_numpy(A.indptr).long(),
+            col_indices=torch.from_numpy(A.indices).long(),
+            values=torch.from_numpy(A.data).float(),
+            size=A.shape, device="cuda")
+      projs_torch = torch.from_numpy(projs).float().to("cuda")
 
-   return x.reshape((80,80))
+      x = ConjGradLeastSq_Torch(A_torch, projs_torch, device=A_torch.device, max_iter=100, tol=1.e-6)
+      return x.cpu().numpy().reshape((80, 80))
+
+   else:
+      LSMR = sp.linalg.lsmr # iterative least-squares solution via the LSMR method
+      x, istop, itn, normr, normar, norma, conda, normx = LSMR(A, projs,
+      atol=1.e-6, btol=1.e-6, maxiter=100, show=ShowSolver)  # atol - matrix resid, btol - y resid
+      return x.reshape((80,80))
+
+@torch.no_grad()  # no need for computation graph
+def ConjGradLeastSq_Torch(A, b, device, max_iter=100, tol=1e-6):
+    x = torch.zeros(A.shape[1], dtype=torch.float32, device=device)
+    r = b - torch.mv(A, x)  # .mv is matrix-vector multiplication
+    p = torch.mv(A.t(), r)
+    d = p.clone()
+
+    norm_g_old = torch.sum(p ** 2)
+
+    for i in range(max_iter):
+        Ad = torch.mv(A, d)
+        alpha = norm_g_old / torch.sum(Ad ** 2)
+
+        x = x + alpha * d
+        r = r - alpha * Ad
+
+        p = torch.mv(A.t(), r)  # matrix vector multiplication
+        norm_g_new = torch.sum(p ** 2)
+
+        if torch.sqrt(norm_g_new) < tol:
+            break
+
+        beta = norm_g_new / norm_g_old
+        d = p + beta * d
+        norm_g_old = norm_g_new
+
+    return x.squeeze()
+
+
+#%% demo routines
 
 
 def demo_static(video, regparam=0.01):
@@ -259,7 +291,7 @@ def demo_static(video, regparam=0.01):
 
    for ang in angs:
       ProjMats.append( sp.csr_matrix(ProjectionSubMatrix(ang, setup=setup)) )
-   x = StaticReconstruction(video, ProjMats, times, RegFcn='Nabla_sparse', regparam=regparam, ShowSolver=False);
+   x = StaticReconstruction(video, ProjMats, times, RegFcn='Nabla_sparse', regparam=regparam, UseTorch=True, ShowSolver=False);
    return x.reshape((80,80))
 
 def demo_dynamic(video, regparam=0.1):
@@ -270,19 +302,32 @@ def demo_dynamic(video, regparam=0.1):
    ProjMats = []
    for ang in angs:
       ProjMats.append( sp.csr_matrix(ProjectionSubMatrix(ang, setup=setup)) )
-   x = StaticReconstruction(video, ProjMats, times, RegFcn='Nabla_sparse', regparam=regparam, ShowSolver=False);
+   x = StaticReconstruction(video, ProjMats, times, RegFcn='Nabla_sparse', regparam=regparam, UseTorch=True, ShowSolver=False);
    return x.reshape((80,80))
 
 
 
-#%%    run demos
+#%%    load video, run demos
 
 if __name__ == "__main__":
-   lilvid = vid1[1121:1121+40,:,:]
 
+#%%  load video
+   lgvid = Loadmp4(); #lgvid has shape (3000,720,1280)
+   vid = []
+   for k in range(lgvid.shape[0]):
+      vid.append( rebin2Darray(lgvid[k,:,:],(360,640))  )
+   vid = np.array(vid)
+   del(lgvid)
+   #normpix = (199,430) # a pixel on the white line
+   for k in range(vid.shape[0]):
+      vid[k,:,:] /= vid[k,:,:].max()
+   vid1 = vid[:,cen1[0]-npix//2:cen1[0]+npix//2, cen1[1]-npix//2:cen1[1]+npix//2]
+   vid2 = vid[:,cen2[0]-npix//2:cen2[0]+npix//2, cen2[1]-npix//2:cen2[1]+npix//2]
+
+#%% run demos
+   lilvid = vid1[1121:1121+40,:,:]
    x_static = demo_static(lilvid, regparam=0.02)
    x_dynamic = demo_dynamic(lilvid, regparam=0.05)
-
    plt.figure(); plt.imshow(lilvid[2,:,:],cmap='coolwarm');plt.colorbar();plt.title('frame 2, True');
    plt.figure(); plt.imshow(lilvid[7,:,:],cmap='coolwarm');plt.colorbar();plt.title('frame 7, True');
    plt.figure(); plt.imshow(lilvid[12,:,:],cmap='coolwarm');plt.colorbar();plt.title('frame 12, True');
