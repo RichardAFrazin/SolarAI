@@ -35,9 +35,11 @@ The UNet input shape is ("nAnglesObs", 80,80) and consists of "nAnglesObs" Radon
 For each training sample, the projections are  acquired over a time interval specified
    by "StartEndObs", which is a list of length 2.  These two numbers are in units
    of frame numbers and must be between 0 and "nFramesOut"-1.
+If UseSolLS is True, a static least-squares solution (x_ls) is computed from the projections and the
+   backprojections entering the UNet are A_k.T@( A_k@( x - x_ls) ), instead of A_k.T@( A_k@x )
 
 """
-def TrainingDataSet(nFramesOut, nAnglesObs, StartEndObs, stride=None, video=PU.vid1):
+def TrainingDataSet(nFramesOut, nAnglesObs, StartEndObs, stride=None, UseSolLS=False, video=PU.vid1):
    if stride is None: stride = nFramesOut//2
    stride = int(stride)
    if video.ndim != 3:
@@ -52,26 +54,38 @@ def TrainingDataSet(nFramesOut, nAnglesObs, StartEndObs, stride=None, video=PU.v
 
    #The projection angles are the same for each sample, so only compute them once
    angles = np.linspace(0, np.pi*nAnglesObs/(nAnglesObs-1), nAnglesObs)
-   times =  np.linspace(StartEndObs[0], StartEndObs[1], nAnglesObs)
+   ProjTimes =  np.linspace(StartEndObs[0], StartEndObs[1], nAnglesObs)
 
-   projmats = []
+   ProjMats = []
    for angle in angles:
-      densemat = PU.ProjectionSubMatrix(angle, setup=PU.setup)  # use sparse format for speed
-      projmats.append(CSR(densemat))
+      ProjMats.append(CSR(PU.ProjectionSubMatrix(angle, setup=PU.setup)))  # use sparse format
    samples = []  # list of input/output tuples
    VideoEnd = False # True signals the end of the video
    k = -1  #sample number
    while not VideoEnd:
       k += 1
       truthvid = video[k*stride : k*stride + nFramesOut, :, :]  # truth video
+      projs = []  # 1D projections
       bpvid = []  # backprojection video
-      #  get the portion of truthvid corresponding to the observation times
-      vidobs = PU.VideoInterpolate(times, truthvid)  # temporal interpolation
+      #  get the video interpolated to the observation times
+      vidobs = PU.VideoInterpolate(ProjTimes, truthvid)  # temporal interpolation
       for i in range(vidobs.shape[0]):
-         #note the use of parentheses to avoid matrix-matrix multiplication!
-         bp = projmats[i].T@(projmats[i]@vidobs[i].reshape((80*80,)))
-         bpvid.append( bp.reshape((80,80))  )
-      samples.append( (np.array(bpvid), truthvid)  )
+         proj_i = ProjMats[i]@vidobs[i].reshape((80*80,))
+         projs.append(proj_i)
+         if not UseSolLS:
+            bp_i = ProjMats[i].T@proj_i
+            bpvid.append( bp_i.reshape((80,80)) )
+      if UseSolLS:  # get least-squares solution
+         x_ls = PU.StaticReconstruction(truthvid, ProjMats, ProjTimes, RegFcn='ID_sparse', regparam=0.01, UseTorch=True, ShowSolver=False)
+         for i in range(vidobs.shape[0]):
+            proj_i = ProjMats[i]@( vidobs[i].reshape((80,80)) - x_ls  )
+            bp_i = ProjMats[i].T@proj_i
+            bpvid.append( bp_i.reshape((80,80))  )
+      if not UseSolLS:
+         samples.append( (np.array(bpvid), truthvid)  )
+      else:
+         x_ls = x_ls.reshape((80,80))
+         samples.append( np.array(bpvid), truthvid - np.tile(x_ls,(truthvid.shape[0],1,1)) )
       if (k+1)*stride + nFramesOut >= video.shape[0]:  #terminate while loop
          VideoEnd=True
 
