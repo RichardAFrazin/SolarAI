@@ -307,24 +307,21 @@ def demo_dynamic(video, regparam=0.1):
 
 
 
-#%%    load video, run demos
-
-if __name__ == "__main__":
-
 #%%  load video
-   lgvid = Loadmp4(); #lgvid has shape (3000,720,1280)
-   vid = []
-   for k in range(lgvid.shape[0]):
-      vid.append( rebin2Darray(lgvid[k,:,:],(360,640))  )
-   vid = np.array(vid)
-   del(lgvid)
-   #normpix = (199,430) # a pixel on the white line
-   for k in range(vid.shape[0]):
-      vid[k,:,:] /= vid[k,:,:].max()
-   vid1 = vid[:,cen1[0]-npix//2:cen1[0]+npix//2, cen1[1]-npix//2:cen1[1]+npix//2]
-   vid2 = vid[:,cen2[0]-npix//2:cen2[0]+npix//2, cen2[1]-npix//2:cen2[1]+npix//2]
+lgvid = Loadmp4(); #lgvid has shape (3000,720,1280)
+vid = []
+for k in range(lgvid.shape[0]):
+   vid.append( rebin2Darray(lgvid[k,:,:],(360,640))  )
+vid = np.array(vid)
+del(lgvid)
+#normpix = (199,430) # a pixel on the white line
+for k in range(vid.shape[0]):
+   vid[k,:,:] /= vid[k,:,:].max()
+vid1 = vid[:,cen1[0]-npix//2:cen1[0]+npix//2, cen1[1]-npix//2:cen1[1]+npix//2]
+vid2 = vid[:,cen2[0]-npix//2:cen2[0]+npix//2, cen2[1]-npix//2:cen2[1]+npix//2]
 
 #%% run demos
+if __name__ == "__main__":
    lilvid = vid1[1121:1121+40,:,:]
    x_static = demo_static(lilvid, regparam=0.02)
    x_dynamic = demo_dynamic(lilvid, regparam=0.05)

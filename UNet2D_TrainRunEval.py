@@ -7,6 +7,7 @@ Created on Fri Aug  7 13:05:24 2026
 """
 
 import os
+import warnings
 import numpy as np
 from scipy.sparse import csr_matrix as CSR
 import matplotlib.pyplot as plt
@@ -36,7 +37,9 @@ For each training sample, the projections are  acquired over a time interval spe
    by "StartEndObs", which is a list of length 2.  These two numbers are in units
    of frame numbers and must be between 0 and "nFramesOut"-1.
 If UseSolLS is True, a static least-squares solution (x_ls) is computed from the projections and the
-   backprojections entering the UNet are A_k.T@( A_k@( x - x_ls) ), instead of A_k.T@( A_k@x )
+   backprojections entering the UNet are A_k.T@( A_k@( x - x_ls) ), instead of A_k.T@( A_k@x ).
+   Enabling UseSolLS also outputs an additional list containing the x_ls corresponding to each
+   sample.
 
 """
 def TrainingDataSet(nFramesOut, nAnglesObs, StartEndObs, stride=None, UseSolLS=False, video=PU.vid1):
@@ -60,6 +63,9 @@ def TrainingDataSet(nFramesOut, nAnglesObs, StartEndObs, stride=None, UseSolLS=F
    for angle in angles:
       ProjMats.append(CSR(PU.ProjectionSubMatrix(angle, setup=PU.setup)))  # use sparse format
    samples = []  # list of input/output tuples
+   if UseSolLS:
+      SolsLS = []  # put the least-squares solutions here
+
    VideoEnd = False # True signals the end of the video
    k = -1  #sample number
    while not VideoEnd:
@@ -76,20 +82,25 @@ def TrainingDataSet(nFramesOut, nAnglesObs, StartEndObs, stride=None, UseSolLS=F
             bp_i = ProjMats[i].T@proj_i
             bpvid.append( bp_i.reshape((80,80)) )
       if UseSolLS:  # get least-squares solution
-         x_ls = PU.StaticReconstruction(truthvid, ProjMats, ProjTimes, RegFcn='ID_sparse', regparam=0.01, UseTorch=True, ShowSolver=False)
+         with warnings.catch_warnings():
+            warnings.simplefilter("ignore",category=UserWarning)
+            x_ls = PU.StaticReconstruction(truthvid, ProjMats, ProjTimes, RegFcn='ID_sparse', regparam=0.01, UseTorch=True, ShowSolver=False)
+            SolsLS.append(x_ls.reshape((80,80)))
          for i in range(vidobs.shape[0]):
-            proj_i = ProjMats[i]@( vidobs[i].reshape((80,80)) - x_ls  )
+            proj_i = ProjMats[i]@( (vidobs[i] - x_ls).reshape((80*80,))  )
             bp_i = ProjMats[i].T@proj_i
             bpvid.append( bp_i.reshape((80,80))  )
       if not UseSolLS:
          samples.append( (np.array(bpvid), truthvid)  )
       else:
          x_ls = x_ls.reshape((80,80))
-         samples.append( np.array(bpvid), truthvid - np.tile(x_ls,(truthvid.shape[0],1,1)) )
+         samples.append( (np.array(bpvid), truthvid - np.tile(x_ls,(truthvid.shape[0],1,1))) )
       if (k+1)*stride + nFramesOut >= video.shape[0]:  #terminate while loop
          VideoEnd=True
-
-   return samples
+   if UseSolLS:
+      return (samples, SolsLS)
+   else:
+      return samples
 
 #%%
 
