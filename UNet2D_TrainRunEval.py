@@ -39,7 +39,7 @@ For each training sample, the projections are  acquired over a time interval spe
 If UseSolLS is True, a static least-squares solution (x_ls) is computed from the projections and the
    backprojections entering the UNet are A_k.T@( A_k@( x - x_ls) ), instead of A_k.T@( A_k@x ).
    Enabling UseSolLS also outputs an additional list containing the x_ls corresponding to each
-   sample.
+   sample.  The purpose of this to train on departures from x_ls.
 
 """
 def TrainingDataSet(nFramesOut, nAnglesObs, StartEndObs, stride=None, UseSolLS=False, video=PU.vid1):
@@ -84,7 +84,7 @@ def TrainingDataSet(nFramesOut, nAnglesObs, StartEndObs, stride=None, UseSolLS=F
       if UseSolLS:  # get least-squares solution
          with warnings.catch_warnings():
             warnings.simplefilter("ignore",category=UserWarning)
-            x_ls = PU.StaticReconstruction(truthvid, ProjMats, ProjTimes, RegFcn='ID_sparse', regparam=0.01, UseTorch=True, ShowSolver=False)
+            x_ls = PU.StaticReconstruction(truthvid, ProjMats, ProjTimes, RegFcn='Nabla_sparse', regparam=0.1, UseTorch=True, ShowSolver=False)
             SolsLS.append(x_ls.reshape((80,80)))
          for i in range(vidobs.shape[0]):
             proj_i = ProjMats[i]@( (vidobs[i] - x_ls).reshape((80*80,))  )
@@ -201,12 +201,20 @@ def LoadCheckpoint(model, optimizer, fnameWpath):
 # This also carries out a static reconstruction in order to compare to the dynamic results
 # sdex - sample index
 # model - the UNet model
-# samplist - list of samples, each element of which is an (observation, target) tuple.
+# TDSoutput - output of TrainingDataSet.  When UseSolLS=False, this is a list of samples,
+#     each element of which is an (observation, target) tuple.  When UseSolLS=True, TDSoutput[0] is
+#     the sample list and TDSoutput[1] is the corresponding list of least-squares solutions
 # regparam - regularization paramter for the static reconstruction
 # ProjMats - Projection Matrices need for comparison to static reconstruction
 #     if not None, they should be supplied in a list
-def ViewResults(sdex, model, samplist, StartEndObs, regparam=0.1, ProjMats=None, device="cuda"):
-
+# UseSolLS - see TDSoutput above
+# ReturnRMS returns RMS errors if True
+def ViewResults(sdex, model, TDSoutput, StartEndObs, regparam=0.1,
+                ProjMats=None, UseSolLS=False, ReturnRMS= False, device="cuda"):
+   if UseSolLS:
+      samplist = TDSoutput[0]; sol = TDSoutput[1]
+   else:
+      samplist = TDSoutput
    nAnglesObs = len(samplist[0][0])
    angles = np.linspace(0, np.pi*(nAnglesObs-1)/nAnglesObs, nAnglesObs)
    obs   = samplist[sdex][0]  # observations (input)
@@ -225,6 +233,8 @@ def ViewResults(sdex, model, samplist, StartEndObs, regparam=0.1, ProjMats=None,
       vid_UNet = model( torch.from_numpy(obs).float().unsqueeze(0).to(device) )
       vid_UNet = (vid_UNet.detach().cpu().numpy()).squeeze(axis=0)
    x_UNet = PU.VideoInterpolate( 0.5*(StartEndObs[0] + StartEndObs[1]), vid_UNet)
+   if UseSolLS:
+      x_UNet += sol[sdex]
 
    image_out = np.hstack((x_true, x_UNet, x_static));
    rms = [np.std(x_UNet-x_true), np.std(x_static - x_true)]
@@ -235,11 +245,22 @@ def ViewResults(sdex, model, samplist, StartEndObs, regparam=0.1, ProjMats=None,
    for text, px_pos in zip(["True", "UNet", "Reg. LstSqu"], [40, 120, 200]):
        plt.text(px_pos, -5, text, fontsize=10, ha='center', weight='bold')
 
-   return image_out
+   if ReturnRMS:
+      return (image_out, rms)
+   else:
+      return image_out
 
 #%%
-def SaveViewResultsOnDisk(model, samplist, StartEndObs, ProjMats=None, output_dir="video_frames", device="cuda"):
+#
+def SaveViewResultsOnDisk(model, TDSoutput, StartEndObs, output_dir,
+                          ProjMats=None, UseSolLS=False, device="cuda"):
     print("Warning: This closes all figures!")
+
+    if UseSolLS:
+       samplist = TDSoutput[0];
+    else:
+       samplist = TDSoutput
+
     os.makedirs(output_dir, exist_ok=True)
     plt.ioff() # Évite d'ouvrir des fenêtres pop-up qui saturent l'écran
 
@@ -256,7 +277,8 @@ def SaveViewResultsOnDisk(model, samplist, StartEndObs, ProjMats=None, output_di
         # Cela laisse 15% de marge à gauche/bas pour les légendes sans changer la taille globale
         ax = fig.add_axes([0.15, 0.15, 0.75, 0.75])
 
-        _ = ViewResults(sdex, model, samplist, StartEndObs, regparam=0.1, ProjMats=ProjMats, device=device)
+        _ = ViewResults(sdex, model, TDSoutput, StartEndObs, regparam=0.1,
+                        ProjMats=None, UseSolLS=UseSolLS, ReturnRMS= False, device="cuda")
 
         # Sauvegarde au format PNG ou JPG avec un index fixe à 3 chiffres (000, 001, 002...)
         plt.savefig(f"{output_dir}/frame_{sdex:03d}.png", dpi=150)
@@ -264,8 +286,8 @@ def SaveViewResultsOnDisk(model, samplist, StartEndObs, ProjMats=None, output_di
     plt.ion()
     return None
 
-
-def CompileImagesToVideo(input_dir="video_frames", output_filename="UNet_results.gif", fps=3):
+#  input_dir - location of input images
+def CompileImagesToVideo(input_dir, gif_output_filename, fps=3):
     files = sorted(glob.glob(f"{input_dir}/frame_*.png"))  #  glob.glob enables wildcard characters in a directory search
     if not files:
         print(f"Not matching files found in {input_dir}")
@@ -275,9 +297,9 @@ def CompileImagesToVideo(input_dir="video_frames", output_filename="UNet_results
     images = [imageio.imread(f) for f in files]
 
     # 3. Sauvegarder le fichier final (.gif ou .mp4 selon l'extension choisie)
-    print(f"Création du fichier {output_filename}...")
+    print(f"Création du fichier {gif_output_filename}...")
     # imageio gère automatiquement le format .gif ou .mp4 selon le nom
-    imageio.mimsave(output_filename, images, fps=fps)
+    imageio.mimsave(gif_output_filename, images, fps=fps)
     print("Video created and saved.")
 
 #%% 3. training script
@@ -292,10 +314,25 @@ if __name__ == "__main__":
         else: pass
     print(f"Using {device} device.")
 
-    inp = input("If you want to build the UNet and train it, type 'B'. If you want to work with the trained model to make images and videos, type 'O'.")
-    if inp.upper() == 'B':
+    inp1 = input("If you want to build the UNet and train it, type 'B'. If you want to work with the trained model to make images and videos, type 'O'.")
+    inp1 = inp1.upper()
+    if inp1 not in ['O','B']: raise ValueError("Must choose 'O' or 'B'.")
+    inp2 = input("Do you want train on/reconstruct the departure from the static least-squares solution?  [Y]es or [N]o.")
+    if inp2.upper() == 'N' : UseSolLS = False
+    elif inp2.upper() == 'Y': UseSolLS = True
+    else: raise ValueError("Must choose 'Y' or 'N'.")
+
+    output_dir = "./video_frames_wLS"
+    videoname = "UNet_LS_results.gif"
+
+    if inp1 == 'B':
+
        # Initialization.  498 samples with TrainingDataSet(16,25,[3.,13.],stride=6)
-       samp = TrainingDataSet(16,25,[3.,13.],stride=6)  #list of samples
+       out = TrainingDataSet(16,25,[3.,13.],stride=6, UseSolLS=UseSolLS)  #list of samples
+       if UseSolLS:
+          samp = out[0]; sol = out[1]  # out[0] is the samples out[1] is the LS solutions
+       else:
+          samp = out
        samp_train = samp[:450]
        samp_validation = samp[450:]
        dataset_train = TomoDataset(samp_train)
@@ -307,16 +344,16 @@ if __name__ == "__main__":
        optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
        model = TrainModel(model, dataloader_train, dataloader_val,
                           criterion, optimizer, device, num_epochs=50)
-    elif inp.upper() == 'O':
+    elif inp1 == 'O':
       print("This assumes the UNet is in memory as 'model', among other things.")
       nAnglesObs = 25; StartEndObs  = [3.,13.]
-      samp_validation_fine = TrainingDataSet(16, nAnglesObs, StartEndObs, stride=1, video=PU.vid1[2687:])
+      out_fine = TrainingDataSet(16, nAnglesObs, StartEndObs, stride=1, UseSolLS=UseSolLS, video=PU.vid1[2687:])
       angles = np.linspace(0, np.pi*(nAnglesObs-1)/nAnglesObs, nAnglesObs)
       ProjMats = []
       for ang in angles:
          ProjMats.append( CSR(PU.ProjectionSubMatrix(ang, setup=PU.setup)) )
-      SaveViewResultsOnDisk(model, samp_validation_fine, StartEndObs, ProjMats=ProjMats, output_dir="video_frames", device="cuda")
-      CompileImagesToVideo(input_dir="video_frames", output_filename="UNet_results.gif", fps=3)
+      SaveViewResultsOnDisk(model, out_fine, StartEndObs, output_dir,
+                          ProjMats=None, UseSolLS=UseSolLS, device="cuda")
+      CompileImagesToVideo("video_frames_wLS", videoname, fps=3)
 
-
-    else: exit()
+    else: raise ValueError("Must choose 'B' or 'O'.")
