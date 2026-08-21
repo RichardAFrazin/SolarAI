@@ -40,9 +40,10 @@ If UseSolLS is True, a static least-squares solution (x_ls) is computed from the
    backprojections entering the UNet are A_k.T@( A_k@( x - x_ls) ), instead of A_k.T@( A_k@x ).
    Enabling UseSolLS also outputs an additional list containing the x_ls corresponding to each
    sample.  The purpose of this to train on departures from x_ls.
+regparam - only matters if UseSolLS is True
 
 """
-def TrainingDataSet(nFramesOut, nAnglesObs, StartEndObs, stride=None, UseSolLS=False, video=PU.vid1):
+def TrainingDataSet(nFramesOut, nAnglesObs, StartEndObs, stride=None, UseSolLS=False, regparam=0.1, video=PU.vid1):
    if stride is None: stride = nFramesOut//2
    stride = int(stride)
    if video.ndim != 3:
@@ -84,7 +85,7 @@ def TrainingDataSet(nFramesOut, nAnglesObs, StartEndObs, stride=None, UseSolLS=F
       if UseSolLS:  # get least-squares solution
          with warnings.catch_warnings():
             warnings.simplefilter("ignore",category=UserWarning)
-            x_ls = PU.StaticReconstruction(truthvid, ProjMats, ProjTimes, RegFcn='Nabla_sparse', regparam=0.1, UseTorch=True, ShowSolver=False)
+            x_ls = PU.StaticReconstruction(truthvid, ProjMats, ProjTimes, RegFcn='Nabla_sparse', regparam=regparam, UseTorch=True, ShowSolver=False)
             SolsLS.append(x_ls.reshape((80,80)))
          for i in range(vidobs.shape[0]):
             proj_i = ProjMats[i]@( (vidobs[i] - x_ls).reshape((80*80,))  )
