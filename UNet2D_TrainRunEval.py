@@ -75,7 +75,7 @@ def TrainingDataSet(nFramesOut, nAnglesObs, StartEndObs, stride=None, UseSolLS=F
       #  get the video interpolated to the observation times
       vidobs = PU.VideoInterpolate(ProjTimes, truthvid)  # temporal interpolation
       for i in range(len(ProjTimes)):
-         proj_i = ProjMats[i]@vidobs[i].reshape((80*80,))
+         proj_i = ProjMats[i]@vidobs[i].reshape((80*80,))  # projection
          bp_i = ProjMats[i].T@proj_i  # backprojection
          bpvid.append( bp_i.reshape((80,80)) )
       if UseSolLS:  # get least-squares solution
@@ -87,7 +87,6 @@ def TrainingDataSet(nFramesOut, nAnglesObs, StartEndObs, stride=None, UseSolLS=F
                    bpvid.append( x_ls.reshape((80,80)) )
                    solsk.append( x_ls.reshape((80,80)) )
                SolsLS.append(solsk)
-
 
       samples.append( (np.array(bpvid), truthvid)  )
       if (k+1)*stride + nFramesOut >= video.shape[0]:  #terminate while loop
@@ -317,8 +316,8 @@ if __name__ == "__main__":
     elif inp2.upper() == 'Y': UseSolLS = True
     else: raise ValueError("Must choose 'Y' or 'N'.")
 
-    output_dir = "./video_frames_wLS"
-    videoname = "UNet_LS_results.gif"
+    output_dir = "./video_frames3"
+    videoname = "UNet_2LS_results.gif"
 
     if inp1 == 'B':
 
@@ -352,6 +351,6 @@ if __name__ == "__main__":
          ProjMats.append( CSR(PU.ProjectionSubMatrix(ang, setup=PU.setup)) )
       SaveViewResultsOnDisk(model, out_fine, StartEndObs, output_dir,
                           ProjMats=None, UseSolLS=UseSolLS, device="cuda")
-      CompileImagesToVideo("video_frames_wLS", videoname, fps=3)
+      CompileImagesToVideo(output_dir, videoname, fps=3)
 
     else: raise ValueError("Must choose 'B' or 'O'.")
