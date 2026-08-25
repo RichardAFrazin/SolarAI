@@ -36,14 +36,12 @@ The UNet input shape is ("nAnglesObs", 80,80) and consists of "nAnglesObs" Radon
 For each training sample, the projections are  acquired over a time interval specified
    by "StartEndObs", which is a list of length 2.  These two numbers are in units
    of frame numbers and must be between 0 and "nFramesOut"-1.
-If UseSolLS is True, a static least-squares solution (x_ls) is computed from the projections and the
-   backprojections entering the UNet are A_k.T@( A_k@( x - x_ls) ), instead of A_k.T@( A_k@x ).
-   Enabling UseSolLS also outputs an additional list containing the x_ls corresponding to each
-   sample.  The purpose of this to train on departures from x_ls.
-regparam - only matters if UseSolLS is True
+If UseSolLS is True, a static least-squares solution (x_ls) is computed from the projections and
+   included as an additional input channel
+regparam - only matters if UseSolLS is True.  Can have more than one value --> more channels added
 
 """
-def TrainingDataSet(nFramesOut, nAnglesObs, StartEndObs, stride=None, UseSolLS=False, regparam=0.1, video=PU.vid1):
+def TrainingDataSet(nFramesOut, nAnglesObs, StartEndObs, stride=None, UseSolLS=False, regparam=[0.1,0.01], video=PU.vid1):
    if stride is None: stride = nFramesOut//2
    stride = int(stride)
    if video.ndim != 3:
@@ -65,37 +63,33 @@ def TrainingDataSet(nFramesOut, nAnglesObs, StartEndObs, stride=None, UseSolLS=F
       ProjMats.append(CSR(PU.ProjectionSubMatrix(angle, setup=PU.setup)))  # use sparse format
    samples = []  # list of input/output tuples
    if UseSolLS:
+      regparam = list(regparam) # make it iterable
       SolsLS = []  # put the least-squares solutions here
 
    VideoEnd = False # True signals the end of the video
    k = -1  #sample number
    while not VideoEnd:
-      k += 1
+      k += 1   # k is the sample index
       truthvid = video[k*stride : k*stride + nFramesOut, :, :]  # truth video
-      projs = []  # 1D projections
       bpvid = []  # backprojection video
       #  get the video interpolated to the observation times
       vidobs = PU.VideoInterpolate(ProjTimes, truthvid)  # temporal interpolation
-      for i in range(vidobs.shape[0]):
+      for i in range(len(ProjTimes)):
          proj_i = ProjMats[i]@vidobs[i].reshape((80*80,))
-         projs.append(proj_i)
-         if not UseSolLS:
-            bp_i = ProjMats[i].T@proj_i
-            bpvid.append( bp_i.reshape((80,80)) )
+         bp_i = ProjMats[i].T@proj_i  # backprojection
+         bpvid.append( bp_i.reshape((80,80)) )
       if UseSolLS:  # get least-squares solution
+         solsk = []
          with warnings.catch_warnings():
-            warnings.simplefilter("ignore",category=UserWarning)
-            x_ls = PU.StaticReconstruction(truthvid, ProjMats, ProjTimes, RegFcn='Nabla_sparse', regparam=regparam, UseTorch=True, ShowSolver=False)
-            SolsLS.append(x_ls.reshape((80,80)))
-         for i in range(vidobs.shape[0]):
-            proj_i = ProjMats[i]@( (vidobs[i] - x_ls).reshape((80*80,))  )
-            bp_i = ProjMats[i].T@proj_i
-            bpvid.append( bp_i.reshape((80,80))  )
-      if not UseSolLS:
-         samples.append( (np.array(bpvid), truthvid)  )
-      else:
-         x_ls = x_ls.reshape((80,80))
-         samples.append( (np.array(bpvid), truthvid - np.tile(x_ls,(truthvid.shape[0],1,1))) )
+               warnings.simplefilter("ignore",category=UserWarning)
+               for reg in regparam:
+                   x_ls = PU.StaticReconstruction(truthvid, ProjMats, ProjTimes, RegFcn='Nabla_sparse', regparam=reg, UseTorch=True, ShowSolver=False)
+                   bpvid.append( x_ls.reshape((80,80)) )
+                   solsk.append( x_ls.reshape((80,80)) )
+               SolsLS.append(solsk)
+
+
+      samples.append( (np.array(bpvid), truthvid)  )
       if (k+1)*stride + nFramesOut >= video.shape[0]:  #terminate while loop
          VideoEnd=True
    if UseSolLS:
@@ -213,7 +207,7 @@ def LoadCheckpoint(model, optimizer, fnameWpath):
 def ViewResults(sdex, model, TDSoutput, StartEndObs, regparam=0.1,
                 ProjMats=None, UseSolLS=False, ReturnRMS= False, device="cuda"):
    if UseSolLS:
-      samplist = TDSoutput[0]; sol = TDSoutput[1]
+      samplist = TDSoutput[0];
    else:
       samplist = TDSoutput
    nAnglesObs = len(samplist[0][0])
@@ -234,8 +228,6 @@ def ViewResults(sdex, model, TDSoutput, StartEndObs, regparam=0.1,
       vid_UNet = model( torch.from_numpy(obs).float().unsqueeze(0).to(device) )
       vid_UNet = (vid_UNet.detach().cpu().numpy()).squeeze(axis=0)
    x_UNet = PU.VideoInterpolate( 0.5*(StartEndObs[0] + StartEndObs[1]), vid_UNet)
-   if UseSolLS:
-      x_UNet += sol[sdex]
 
    image_out = np.hstack((x_true, x_UNet, x_static));
    rms = [np.std(x_UNet-x_true), np.std(x_static - x_true)]
@@ -315,10 +307,12 @@ if __name__ == "__main__":
         else: pass
     print(f"Using {device} device.")
 
+    n_input_angles = 25
+
     inp1 = input("If you want to build the UNet and train it, type 'B'. If you want to work with the trained model to make images and videos, type 'O'.")
     inp1 = inp1.upper()
     if inp1 not in ['O','B']: raise ValueError("Must choose 'O' or 'B'.")
-    inp2 = input("Do you want train on/reconstruct the departure from the static least-squares solution?  [Y]es or [N]o.")
+    inp2 = input("Do you want to include regularized static least-squares solutions as an inputs?  [Y]es or [N]o.")
     if inp2.upper() == 'N' : UseSolLS = False
     elif inp2.upper() == 'Y': UseSolLS = True
     else: raise ValueError("Must choose 'Y' or 'N'.")
@@ -329,18 +323,21 @@ if __name__ == "__main__":
     if inp1 == 'B':
 
        # Initialization.  498 samples with TrainingDataSet(16,25,[3.,13.],stride=6)
-       out = TrainingDataSet(16,25,[3.,13.],stride=6, UseSolLS=UseSolLS)  #list of samples
+
+       out = TrainingDataSet(16, n_input_angles, [3.,13.],stride=6, UseSolLS=UseSolLS, regparam=[0.1,0.01])  #list of samples
+
        if UseSolLS:
           samp = out[0]; sol = out[1]  # out[0] is the samples out[1] is the LS solutions
        else:
           samp = out
+       n_input_chan = samp[0][0].shape[0]
        samp_train = samp[:450]
        samp_validation = samp[450:]
        dataset_train = TomoDataset(samp_train)
        dataset_val = TomoDataset(samp_validation)
        dataloader_train = DataLoader(dataset_train, batch_size=10, shuffle=True)
        dataloader_val = DataLoader(dataset_val, batch_size=10, shuffle=False)
-       model = UN.TomoUNet(n_input_angles=25, n_output_times=16).to(device)
+       model = UN.TomoUNet(n_input_chan=n_input_chan, n_output_times=16).to(device)
        criterion = nn.MSELoss()
        optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
        model = TrainModel(model, dataloader_train, dataloader_val,

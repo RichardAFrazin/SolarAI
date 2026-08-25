@@ -23,22 +23,26 @@ class DoubleConv(nn.Module): # this does not alter the 80x80 image size, but the
     def forward(self, x):
         return self.conv(x)
 
-#This UNet takes set of backprojection image (each at perhaps a different time) as input,
+#This UNet takes set of backprojection images (each at perhaps a different time) as input,
 #   and it creates an output tensor of 2D images at various times.
 #   Each backprojection is an 80x80 and found from applying the adjoint (transpose) of the projection
 #   operator for angle k to y_k, which is the projection obtained at angle k.
 #   Thus, the input size is (n_projs, 80, 80)
 #        the  output size is (n_output_times, 80,80)
-#n_projs - number of input projections (perhaps a different times)
-#n_output_times - the number of time points in the output reconstruction
+# n_input_chan - number of input channels.  This is at least the number of
+#    backprojections, which are likely to be at different times.  Allowing n_input_chan
+#    to be > than the number of backprojections allows additional input images, such
+#    as regularized least-square solutions.
+#n_output_times - the number of time points in the output reconstruction.  This is
+#    the number of output channels (each channel is an image).
 
 class TomoUNet(nn.Module):
-    def __init__(self, n_input_angles, n_output_times):
+    def __init__(self, n_input_chan, n_output_times):
         super().__init__()
 
         # 1. fonctions de l'ENCODEUR (Descente)
-        # Reçoit (n_input_angles, 80, 80) -> Sort (64, 80, 80)
-        self.inc = DoubleConv(n_input_angles, 64)
+        # Reçoit (n_input_chan, 80, 80) -> Sort (64, 80, 80)
+        self.inc = DoubleConv(n_input_chan, 64)
         self.pool1 = nn.MaxPool2d(kernel_size=2, stride=2) # 80x80 -> 40x40
 
         # Reçoit (64, 40, 40) -> Sort (128, 40, 40)
@@ -97,13 +101,13 @@ class TomoUNet(nn.Module):
 # --- SCRIPT DE TEST RAPIDE ---
 if __name__ == "__main__":
     # Paramètres de votre problème-jouet
-    n_input_angles=11; n_output_times = 15
+    n_input_chan=11; n_output_times = 15
 
     # Instance du modèle
-    model = TomoUNet(n_input_angles, n_output_times)
+    model = TomoUNet(n_input_chan, n_output_times)
 
     # Simulation d'un lot (batch) de 4 exemples de données d'entrée
-    donnees_test = torch.rand(4, n_input_angles, 80, 80)
+    donnees_test = torch.rand(4, n_input_chan, 80, 80)
 
     # Passage dans le modèle
     prediction = model(donnees_test)
