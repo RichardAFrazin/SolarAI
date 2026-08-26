@@ -38,7 +38,7 @@ class DoubleConv(nn.Module): # this does not alter the 80x80 image size, but the
 #    the number of output channels (each channel is an image).
 
 class TomoUNet(nn.Module):
-    def __init__(self, n_input_chan, n_output_times, n_input_times):
+    def __init__(self, n_input_chan, n_output_times, n_input_times):  # don't need to include batch dimension
         super().__init__()
 
         if n_input_times > n_input_chan:
@@ -89,7 +89,7 @@ class TomoUNet(nn.Module):
         """
 
 
-    def forward(self, x, input_times):
+    def forward(self, x, input_times):  #  need to include batch dimension
 
         def TimeKernel1D(input_times):
           if len(input_times) != self.n_input_times:
@@ -112,27 +112,28 @@ class TomoUNet(nn.Module):
 
 # Préparation des dimensions de 'b' pour la convolution 1D sur les canaux
 # On aplatit les dimensions spatiales (20x20) pour n'avoir qu'une dimension de longueur 400
-        channels, height, width = b.shape
-        b_1d = b.view(channels, height * width)  # (256, 400)
+        batch, channels, height, width = b.shape
+        b_1d = b.view(batch, channels, height * width)  # (256, 400)
 
         pad_size = 12
 # On copie les 12 derniers canaux au début, et les 12 premiers canaux à la fin
-        b_padded = torch.cat([b_1d[-pad_size:, :], b_1d, b_1d[:pad_size, :]], dim=0)  # Forme : (280, 400)
-        b_padded = b_padded.t().unsqueeze(0) # expected input shape is (1, 280, 400) , output (1,400,280)
-        time_ker2 = time_ker.view(1,1,25).repeat(400,1,1)
-        b_conv = F.conv1d(b_padded, time_ker2, groups=400) #output (1,400,256)
-        b_conv = (b_conv.squeeze()).t() # output (256,400)
+        b_padded = torch.cat([b_1d[:,-pad_size:, :], b_1d, b_1d[:,:pad_size, :]], dim=1)  #  output : (batch,280, 400)
+        b_padded = b_padded.permute(0,2,1).unsqueeze(1) # expected input shape is (batch, 280, 400) , output (batch, 1,400,280)
+        time_ker2 = time_ker.view(1,1,25).repeat(1,400,1,1)  # output (1,400, 1, 25)
+        # F.conv1d considers the last dimension to be spatial one where the convolution takes place.
+        b_conv = F.conv1d(b_padded, time_ker2, groups=400) #output (1,1,400,256).  convolves (1,1,400,280) with (400,1,25)
+        b_conv = (b_conv.squeeze()).t() # output (batch, 256,400)
         b_conv = b_conv.view(256,20,20)
 
         # ─── DÉCODEUR ───
-        u1 = self.up1(b_conv)           # (256, 40, 40)
-        c1 = torch.cat([u1, x2], dim=1) # Concaténation le long de l'axe des canaux -> (384, 40, 40)
-        d1 = self.up_conv1(c1)  # d1.shape = (128, 40, 40)
+        u1 = self.up1(b_conv)           # (B, 256, 40, 40)
+        c1 = torch.cat([u1, x2], dim=1) # Concaténation le long de l'axe des canaux -> (B, 384, 40, 40)
+        d1 = self.up_conv1(c1)  # d1.shape = (B, 128, 40, 40)
 
-        u2 = self.up2(d1)  # u2.shape = (128,80,80)
-        c2 = torch.cat([u2,x1] ,dim=1)  # c2.shape = (192, 80, 80)
-        d2 = self.up_conv2(c2)     # (64, 80, 80)
-        out = self.out_conv(d2)    # (n_output_times, 80, 80)
+        u2 = self.up2(d1)  # u2.shape = (B, 128,80,80)
+        c2 = torch.cat([u2,x1] ,dim=1)  # c2.shape = (B, 192, 80, 80)
+        d2 = self.up_conv2(c2)     # (B, 64, 80, 80)
+        out = self.out_conv(d2)    # (B, n_output_times, 80, 80)
         out = self.activation_positive(out)
 
         return out
