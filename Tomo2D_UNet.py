@@ -44,13 +44,14 @@ class TomoUNet(nn.Module):
         if n_input_times > n_input_chan:
            raise ValueError("n_input_times must be <= n_input_chan")
         self.n_input_times = n_input_times
+        self.time_ker_size = 25
 
         self.time_network = nn.Sequential( # 1D dense network for input times
              nn.Linear(n_input_times, 50),
              nn.ReLU(inplace=True),
              nn.Linear(50, 50),
              nn.ReLU(inplace=True),
-             nn.Linear(50, 25)     )
+             nn.Linear(50, self.time_ker_size)     )
 
         # 1. fonctions de l'ENCODEUR (Descente)
         # Reçoit (n_input_chan, 80, 80) -> Sort (64, 80, 80)
@@ -92,10 +93,14 @@ class TomoUNet(nn.Module):
     def forward(self, x, input_times):  #  need to include batch dimension
 
         def TimeKernel1D(input_times):
-          if len(input_times) != self.n_input_times:
+          if len(input_times[0,:]) != self.n_input_times:  # it must have a batch dimension
              raise ValueError("len(input_times) must equal n_input_times.")
-             s = self.time_network(input_times)
-             return s
+          n_batch = input_times.shape[0]
+          timekers = torch.zeros(n_batch, self.time_ker_size)
+          for k in range(n_batch):
+                 s = self.time_network(input_times[k,:].unsqueeze(0))  # add batch dimension
+                 timekers[k,:] = s.squeeze(0)
+          return timekers
 
         # ─── ENCODEUR ───
         x1 = self.inc(x)           # (64, 80, 80) -> Sauvegardé pour Skip Connection 1
@@ -106,27 +111,24 @@ class TomoUNet(nn.Module):
 
         # ─── GOULOT D'ÉTRANGLEMENT ───
         b = self.bottleneck(p2)    # (256, 20, 20)
+        n_batch, channels, height, width = b.shape
+        pad_size = self.time_ker_size//2
+        b_conv_total = torch.zeros_like(b)
 
-        time_ker = TimeKernel1D(input_times)
+        time_kers = TimeKernel1D(input_times)  # output (batch, self.time_ker_size)
 
-
-# Préparation des dimensions de 'b' pour la convolution 1D sur les canaux
-# On aplatit les dimensions spatiales (20x20) pour n'avoir qu'une dimension de longueur 400
-        batch, channels, height, width = b.shape
-        b_1d = b.view(batch, channels, height * width)  # (256, 400)
-
-        pad_size = 12
-# On copie les 12 derniers canaux au début, et les 12 premiers canaux à la fin
-        b_padded = torch.cat([b_1d[:,-pad_size:, :], b_1d, b_1d[:,:pad_size, :]], dim=1)  #  output : (batch,280, 400)
-        b_padded = b_padded.permute(0,2,1).unsqueeze(1) # expected input shape is (batch, 280, 400) , output (batch, 1,400,280)
-        time_ker2 = time_ker.view(1,1,25).repeat(1,400,1,1)  # output (1,400, 1, 25)
-        # F.conv1d considers the last dimension to be spatial one where the convolution takes place.
-        b_conv = F.conv1d(b_padded, time_ker2, groups=400) #output (1,1,400,256).  convolves (1,1,400,280) with (400,1,25)
-        b_conv = (b_conv.squeeze()).t() # output (batch, 256,400)
-        b_conv = b_conv.view(256,20,20)
+        for k in range(n_batch): # F.conv1D only does the convolution along axis=2
+            b_sample = b[k].view(channels, height*width)
+            b_padded = torch.cat([b_sample[-pad_size:, :], b_sample, b_sample[:pad_size, :]], dim=0) # (280, 400)
+            b_padded = b_padded.permute(1, 0).unsqueeze(1) # output (400, 1, 280)
+            time_ker = time_kers[k].view(1,1, self.time_ker_size)
+            res_conv = F.conv1d(b_padded, time_ker, padding=0)  # output (400,1,256)
+            res_conv = res_conv.squeeze(1).permute(1,0) # output (256,400)
+            res_conv = res_conv.view(channels, height, width)  # output (256,20,20)
+            b_conv_total[k] = res_conv
 
         # ─── DÉCODEUR ───
-        u1 = self.up1(b_conv)           # (B, 256, 40, 40)
+        u1 = self.up1(b_conv_total)           # (B, 256, 40, 40)
         c1 = torch.cat([u1, x2], dim=1) # Concaténation le long de l'axe des canaux -> (B, 384, 40, 40)
         d1 = self.up_conv1(c1)  # d1.shape = (B, 128, 40, 40)
 
@@ -138,23 +140,22 @@ class TomoUNet(nn.Module):
 
         return out
 
-
-
 # End of class TomoUNet
 
 # --- SCRIPT DE TEST RAPIDE ---
 if __name__ == "__main__":
     # Paramètres de votre problème-jouet
-    n_input_chan=11; n_output_times = 15
+    n_input_chan=11; n_output_times = 15; n_input_times = 9
 
     # Instance du modèle
-    model = TomoUNet(n_input_chan, n_output_times)
+    model = TomoUNet(n_input_chan, n_output_times, n_input_times)
 
     # Simulation d'un lot (batch) de 4 exemples de données d'entrée
-    donnees_test = torch.rand(4, n_input_chan, 80, 80)
+    donnees_test = torch.rand(4, n_input_chan, 80, 80)  # batch of 4
+    times = torch.rand(4, n_input_times)
 
     # Passage dans le modèle
-    prediction = model(donnees_test)
+    prediction = model(donnees_test, times)
 
     print("Forme de l'entrée (Projections) :", donnees_test.shape)
     print("Forme de la sortie (Images)     :", prediction.shape)
