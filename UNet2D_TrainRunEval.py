@@ -36,12 +36,14 @@ The UNet input shape is ("nAnglesObs", 80,80) and consists of "nAnglesObs" Radon
 For each training sample, the projections are  acquired over a time interval specified
    by "StartEndObs", which is a list of length 2.  These two numbers are in units
    of frame numbers and must be between 0 and "nFramesOut"-1.
+If RandomProjTimes is True, the acquistion times are randomly distributed between StartEndObs[0]
+   and StartEndObs[1].  If not, they are evenly distributed.
 If UseSolLS is True, a static least-squares solution (x_ls) is computed from the projections and
    included as an additional input channel
 regparam - only matters if UseSolLS is True.  Can have more than one value --> more channels added
 
 """
-def TrainingDataSet(nFramesOut, nAnglesObs, StartEndObs, stride=None, UseSolLS=False, regparam=[0.1,0.01], video=PU.vid1):
+def TrainingDataSet(nFramesOut, nAnglesObs, StartEndObs, RandomProjTimes=False, stride=None, UseSolLS=False, regparam=[0.1,0.01], video=PU.vid1):
    if stride is None: stride = nFramesOut//2
    stride = int(stride)
    if video.ndim != 3:
@@ -56,7 +58,18 @@ def TrainingDataSet(nFramesOut, nAnglesObs, StartEndObs, stride=None, UseSolLS=F
 
    #The projection angles are the same for each sample, so only compute them once
    angles = np.linspace(0, np.pi*nAnglesObs/(nAnglesObs-1), nAnglesObs)
-   ProjTimes =  np.linspace(StartEndObs[0], StartEndObs[1], nAnglesObs)
+
+   def RandomTimes(n, StartEnd):
+      dt = np.random.rand(n)
+      dt /= np.sum(dt)
+      dt = (StartEnd[1]-StartEnd[0])*np.cumsum(dt)
+      tt = StartEnd[0] + dt
+      return(tt)
+
+   if RandomProjTimes:
+      ProjTimes = RandomTimes(nAnglesObs, StartEndObs)
+   else: #evenly distributed data acquisition times
+      ProjTimes =  np.linspace(StartEndObs[0], StartEndObs[1], nAnglesObs)
 
    ProjMats = []
    for angle in angles:
@@ -91,10 +104,14 @@ def TrainingDataSet(nFramesOut, nAnglesObs, StartEndObs, stride=None, UseSolLS=F
       samples.append( (np.array(bpvid), truthvid)  )
       if (k+1)*stride + nFramesOut >= video.shape[0]:  #terminate while loop
          VideoEnd=True
+
+   ReturnD = {'samples' : samples}
    if UseSolLS:
-      return (samples, SolsLS)
-   else:
-      return samples
+      ReturnD['SolsLS'] = SolsLS
+   if RandomProjTimes:
+      ReturnD['ProjTimes'] = ProjTimes
+
+   return ReturnD
 
 #%%
 
@@ -205,10 +222,7 @@ def LoadCheckpoint(model, optimizer, fnameWpath):
 # ReturnRMS returns RMS errors if True
 def ViewResults(sdex, model, TDSoutput, StartEndObs, regparam=0.1,
                 ProjMats=None, UseSolLS=False, ReturnRMS= False, device="cuda"):
-   if UseSolLS:
-      samplist = TDSoutput[0];
-   else:
-      samplist = TDSoutput
+   samplist = TDSoutput['samples']
    nAnglesObs = len(samplist[0][0])
    angles = np.linspace(0, np.pi*(nAnglesObs-1)/nAnglesObs, nAnglesObs)
    obs   = samplist[sdex][0]  # observations (input)
@@ -248,10 +262,7 @@ def SaveViewResultsOnDisk(model, TDSoutput, StartEndObs, output_dir,
                           ProjMats=None, UseSolLS=False, device="cuda"):
     print("Warning: This closes all figures!")
 
-    if UseSolLS:
-       samplist = TDSoutput[0];
-    else:
-       samplist = TDSoutput
+    samplist = TDSoutput['samples']
 
     os.makedirs(output_dir, exist_ok=True)
     plt.ioff() # Évite d'ouvrir des fenêtres pop-up qui saturent l'écran
@@ -326,9 +337,8 @@ if __name__ == "__main__":
        out = TrainingDataSet(16, n_input_angles, [3.,13.],stride=6, UseSolLS=UseSolLS, regparam=[0.1,0.01])  #list of samples
 
        if UseSolLS:
-          samp = out[0]; sol = out[1]  # out[0] is the samples out[1] is the LS solutions
-       else:
-          samp = out
+          sol = out['SolsLS']  # LS solutions
+       samp = out['samples']
        n_input_chan = samp[0][0].shape[0]
        samp_train = samp[:450]
        samp_validation = samp[450:]
