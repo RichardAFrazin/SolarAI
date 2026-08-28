@@ -43,7 +43,7 @@ If UseSolLS is True, a static least-squares solution (x_ls) is computed from the
 regparam - only matters if UseSolLS is True.  Can have more than one value --> more channels added
 
 """
-def TrainingDataSet(nFramesOut, nAnglesObs, StartEndObs, RandomProjTimes=False, stride=None, UseSolLS=False, regparam=[0.1,0.01], video=PU.vid1):
+def TrainingDataSet(nFramesOut, nAnglesObs, StartEndObs, stride=None, RandomProjTimes=False, UseSolLS=False, regparam=[0.1,0.01], video=PU.vid1):
    if stride is None: stride = nFramesOut//2
    stride = int(stride)
    if video.ndim != 3:
@@ -56,38 +56,50 @@ def TrainingDataSet(nFramesOut, nAnglesObs, StartEndObs, RandomProjTimes=False, 
    if (video.shape[1] != 80) or (video.shape[2] != 80):
       raise ValueError("The video must consist of 80x80 images.")
 
-   #The projection angles are the same for each sample, so only compute them once
-   angles = np.linspace(0, np.pi*nAnglesObs/(nAnglesObs-1), nAnglesObs)
-
-   def RandomTimes(n, StartEnd):
+   def RandomTimes(n, StartEnd):  #Returns random obs. times and corresponding angles
       dt = np.random.rand(n)
       dt /= np.sum(dt)
       dt = (StartEnd[1]-StartEnd[0])*np.cumsum(dt)
-      tt = StartEnd[0] + dt
-      return(tt)
+      angles = np.pi*np.cumsum(dt)
+      times = StartEnd[0] + dt
+      return   (times, angles)
 
-   if RandomProjTimes:
-      ProjTimes = RandomTimes(nAnglesObs, StartEndObs)
-   else: #evenly distributed data acquisition times
-      ProjTimes =  np.linspace(StartEndObs[0], StartEndObs[1], nAnglesObs)
+   ProjTimes  = []
+   ProjAngles = []
 
+   # default is evenly distributed data acquisition times and angles
+   times =  np.linspace(StartEndObs[0], StartEndObs[1], nAnglesObs)
+   angles = np.linspace(0, np.pi*nAnglesObs/(nAnglesObs-1), nAnglesObs)
    ProjMats = []
    for angle in angles:
-      ProjMats.append(CSR(PU.ProjectionSubMatrix(angle, setup=PU.setup)))  # use sparse format
-   samples = []  # list of input/output tuples
+      ProjMats.append(CSR(PU.ProjectionSubMatrix(angle, setup=PU.setup)))
+
    if UseSolLS:
       regparam = list(regparam) # make it iterable
       SolsLS = []  # put the least-squares solutions here
 
+   samples = []  # list of input/output tuples
+
+   # Loop over the video
    VideoEnd = False # True signals the end of the video
    k = -1  #sample number
    while not VideoEnd:
       k += 1   # k is the sample index
       truthvid = video[k*stride : k*stride + nFramesOut, :, :]  # truth video
       bpvid = []  # backprojection video
+
+      if RandomProjTimes:
+         (times, angles) = RandomTimes(nAnglesObs, StartEndObs)
+         ProjMats = []
+         for angle in angles:
+            ProjMats.append(CSR(PU.ProjectionSubMatrix(angle, setup=PU.setup)))
+
+      ProjTimes.append( times) #appended whether or not RandomProjTimes is True
+      ProjAngles.append(angles)
+
       #  get the video interpolated to the observation times
-      vidobs = PU.VideoInterpolate(ProjTimes, truthvid)  # temporal interpolation
-      for i in range(len(ProjTimes)):
+      vidobs = PU.VideoInterpolate(times, truthvid)  # temporal interpolation
+      for i in range(len(angles)):
          proj_i = ProjMats[i]@vidobs[i].reshape((80*80,))  # projection
          bp_i = ProjMats[i].T@proj_i  # backprojection
          bpvid.append( bp_i.reshape((80,80)) )
@@ -96,7 +108,7 @@ def TrainingDataSet(nFramesOut, nAnglesObs, StartEndObs, RandomProjTimes=False, 
          with warnings.catch_warnings():
                warnings.simplefilter("ignore",category=UserWarning)
                for reg in regparam:
-                   x_ls = PU.StaticReconstruction(truthvid, ProjMats, ProjTimes, RegFcn='Nabla_sparse', regparam=reg, UseTorch=True, ShowSolver=False)
+                   x_ls = PU.StaticReconstruction(truthvid, ProjMats, times, RegFcn='Nabla_sparse', regparam=reg, UseTorch=True, ShowSolver=False)
                    bpvid.append( x_ls.reshape((80,80)) )
                    solsk.append( x_ls.reshape((80,80)) )
                SolsLS.append(solsk)
@@ -105,11 +117,9 @@ def TrainingDataSet(nFramesOut, nAnglesObs, StartEndObs, RandomProjTimes=False, 
       if (k+1)*stride + nFramesOut >= video.shape[0]:  #terminate while loop
          VideoEnd=True
 
-   ReturnD = {'samples' : samples}
+   ReturnD = {'samples' : samples, 'ProjTimes': ProjTimes, 'ProjAngles': ProjAngles}
    if UseSolLS:
       ReturnD['SolsLS'] = SolsLS
-   if RandomProjTimes:
-      ReturnD['ProjTimes'] = ProjTimes
 
    return ReturnD
 
@@ -212,23 +222,28 @@ def LoadCheckpoint(model, optimizer, fnameWpath):
 # This also carries out a static reconstruction in order to compare to the dynamic results
 # sdex - sample index
 # model - the UNet model
-# TDSoutput - output of TrainingDataSet.  When UseSolLS=False, this is a list of samples,
-#     each element of which is an (observation, target) tuple.  When UseSolLS=True, TDSoutput[0] is
-#     the sample list and TDSoutput[1] is the corresponding list of least-squares solutions
+# TDSoutput - output of TrainingDataSet.
 # regparam - regularization paramter for the static reconstruction
-# ProjMats - Projection Matrices need for comparison to static reconstruction
-#     if not None, they should be supplied in a list
-# UseSolLS - see TDSoutput above
+# ProjAngles- Projection angles need for comparison to static reconstruction
+#     if not None, they should be supplied in a list.
 # ReturnRMS returns RMS errors if True
-def ViewResults(sdex, model, TDSoutput, StartEndObs, regparam=0.1,
-                ProjMats=None, UseSolLS=False, ReturnRMS= False, device="cuda"):
+def ViewResults(sdex, model, TDSoutput,
+                regparam=0.1, ReturnRMS= False, device="cuda"):
    samplist = TDSoutput['samples']
    nAnglesObs = len(samplist[0][0])
-   angles = np.linspace(0, np.pi*(nAnglesObs-1)/nAnglesObs, nAnglesObs)
    obs   = samplist[sdex][0]  # observations (input)
    targ   = samplist[sdex][1] # target video frames (output)
-   times =  np.linspace(StartEndObs[0], StartEndObs[1], nAnglesObs)  #observation times
-   if ProjMats is None:   # get the projection matrices
+   if ProjTimes is None:
+      if ProjAngles is not None:
+         raise ValueError("Both or neither ProjAngles and ProjTimes must be supplied.")
+      times =  np.linspace(StartEndObs[0], StartEndObs[1], nAnglesObs)  #observation times
+      angles = np.linspace(0, np.pi*(nAnglesObs-1)/nAnglesObs, nAnglesObs)
+   else:  #  ProjTimes is present
+       times = ProjTimes
+       if ProjAngles is None:
+          raise ValueError("Both or neither ProjAngles and ProjTimes must be supplied.")
+       angles =
+
       ProjMats = []
       for ang in angles:
          ProjMats.append( PU.ProjectionSubMatrix(ang, setup=PU.setup) )
@@ -259,7 +274,7 @@ def ViewResults(sdex, model, TDSoutput, StartEndObs, regparam=0.1,
 #%%
 #
 def SaveViewResultsOnDisk(model, TDSoutput, StartEndObs, output_dir,
-                          ProjMats=None, UseSolLS=False, device="cuda"):
+                          ProjMats=None, device="cuda"):
     print("Warning: This closes all figures!")
 
     samplist = TDSoutput['samples']
@@ -281,7 +296,7 @@ def SaveViewResultsOnDisk(model, TDSoutput, StartEndObs, output_dir,
         ax = fig.add_axes([0.15, 0.15, 0.75, 0.75])
 
         _ = ViewResults(sdex, model, TDSoutput, StartEndObs, regparam=0.1,
-                        ProjMats=None, UseSolLS=UseSolLS, ReturnRMS= False, device="cuda")
+                        ProjMats=None, ReturnRMS= False, device="cuda")
 
         # Sauvegarde au format PNG ou JPG avec un index fixe à 3 chiffres (000, 001, 002...)
         plt.savefig(f"{output_dir}/frame_{sdex:03d}.png", dpi=150)
@@ -322,9 +337,14 @@ if __name__ == "__main__":
     inp1 = input("If you want to build the UNet and train it, type 'B'. If you want to work with the trained model to make images and videos, type 'O'.")
     inp1 = inp1.upper()
     if inp1 not in ['O','B']: raise ValueError("Must choose 'O' or 'B'.")
-    inp2 = input("Do you want to include regularized static least-squares solutions as an inputs?  [Y]es or [N]o.")
-    if inp2.upper() == 'N' : UseSolLS = False
-    elif inp2.upper() == 'Y': UseSolLS = True
+    if inp1 == 'B':
+       inp2 = input("Do you want to include regularized static least-squares solutions as an inputs?  [Y]es or [N]o.")
+       if inp2.upper() == 'N' : UseSolLS = False
+       elif inp2.upper() == 'Y': UseSolLS = True
+       else: raise ValueError("Must choose 'Y' or 'N'.")
+    inp3 = input("Do you want random observation times within the interval specified by StartEndObs?  [Y] or [N]o.")
+    if inp3.upper() == 'N'  : RandomProjTimes = False
+    elif inp3.upper() == 'Y': RandomProjTimes = True
     else: raise ValueError("Must choose 'Y' or 'N'.")
 
     output_dir = "./video_frames3"
@@ -332,13 +352,15 @@ if __name__ == "__main__":
 
     if inp1 == 'B':
 
-       # Initialization.  498 samples with TrainingDataSet(16,25,[3.,13.],stride=6)
+       # Initialization.  498 samples with TrainingDataSet nFramesOut=16, StartEndObs=[3.,13.] ,stride=6
 
-       out = TrainingDataSet(16, n_input_angles, [3.,13.],stride=6, UseSolLS=UseSolLS, regparam=[0.1,0.01])  #list of samples
+       out = TrainingDataSet(16, n_input_angles, [3.,13.],stride=6, RandomProjTimes=RandomProjTimes,
+                             UseSolLS=UseSolLS, regparam=[0.1,0.01])
 
+       samp = out['samples']
        if UseSolLS:
           sol = out['SolsLS']  # LS solutions
-       samp = out['samples']
+
        n_input_chan = samp[0][0].shape[0]
        samp_train = samp[:450]
        samp_validation = samp[450:]
@@ -354,7 +376,8 @@ if __name__ == "__main__":
     elif inp1 == 'O':
       print("This assumes the UNet is in memory as 'model', among other things.")
       nAnglesObs = 25; StartEndObs  = [3.,13.]
-      out_fine = TrainingDataSet(16, nAnglesObs, StartEndObs, stride=1, UseSolLS=UseSolLS, video=PU.vid1[2687:])
+      out_fine = TrainingDataSet(16, nAnglesObs, StartEndObs, stride=1, RandomProjTimes=RandomProjTimes,
+                                 UseSolLS=UseSolLS, video=PU.vid1[2687:])
       angles = np.linspace(0, np.pi*(nAnglesObs-1)/nAnglesObs, nAnglesObs)
       ProjMats = []
       for ang in angles:

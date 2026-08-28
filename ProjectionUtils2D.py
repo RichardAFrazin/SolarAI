@@ -192,6 +192,7 @@ def ID_sparse(N):  # this image is assume to be NxN pixels
    return sp.eye(N*N, format='csr')
 
 #This performs a regularized static reconstruction via least-squares solution
+#   The projection data are acquired as the video evolves in time.
 #video - np.array of shape (n_frames, 80. 80)
 #ProjMats - list of projection matrices corresponding to the observed angles
 #    can be in a scipy.sparse format, but not a Torch.tensor
