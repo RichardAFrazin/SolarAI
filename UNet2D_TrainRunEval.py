@@ -126,9 +126,9 @@ def TrainingDataSet(nFramesOut, nAnglesObs, StartEndObs, stride=None, RandomProj
 
 # 1. Dataset pour les paires (observation, vérité)
 class TomoDataset(Dataset):
-    def __init__(self, data_dict):
-        self.samples = data_dict['samples']
-        self.proj_times = data_dict['ProjTimes']
+    def __init__(self, samples, proj_times): # data_dict):
+        self.samples = samples  # self.samples = data_dict['samples']
+        self.proj_times = proj_times # self.proj_times = data_dict['ProjTimes']
 
     def __len__(self):
         return len(self.samples)
@@ -341,7 +341,7 @@ if __name__ == "__main__":
 
     output_dir = "./video_frames4"
     videoname = "UNet_rndTime_2LS_results.gif"
-
+#%%
     if inp1 == 'B':
 
        # Initialization.  498 samples with TrainingDataSet nFramesOut=16, StartEndObs=[3.,13.] ,stride=6
@@ -354,7 +354,9 @@ if __name__ == "__main__":
        if UseSolLS:
           sol = out['SolsLS']  # LS solutions
 
-       n_input_chan = samp[0][0].shape[0]
+       n_input_chan  = samp[0][0].shape[0]  # may not equal n_input_times
+       n_output_chan = samp[0][1].shape[0]  # number of output times
+       n_input_times = len(times[0])
        samp_train = samp[:450]
        times_train = times[:450]
        samp_validation = samp[450:]
@@ -363,7 +365,7 @@ if __name__ == "__main__":
        dataset_val = TomoDataset(samp_validation, times_val)
        dataloader_train = DataLoader(dataset_train, batch_size=10, shuffle=True)
        dataloader_val = DataLoader(dataset_val, batch_size=10, shuffle=False)
-       model = UN.TomoUNet(n_input_chan=n_input_chan, n_output_times=16).to(device)
+       model = UN.TomoUNet(n_input_chan, n_output_chan, n_input_times).to(device)
        criterion = nn.MSELoss()
        optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
        model = TrainModel(model, dataloader_train, dataloader_val,

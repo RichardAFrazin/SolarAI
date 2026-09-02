@@ -96,7 +96,7 @@ class TomoUNet(nn.Module):
           if len(input_times[0,:]) != self.n_input_times:  # it must have a batch dimension
              raise ValueError("len(input_times) must equal n_input_times.")
           n_batch = input_times.shape[0]
-          timekers = torch.zeros(n_batch, self.time_ker_size)
+          timekers = torch.zeros(n_batch, self.time_ker_size, device=input_times.device)
           for k in range(n_batch):
                  s = self.time_network(input_times[k,:].unsqueeze(0))  # add batch dimension
                  timekers[k,:] = s.squeeze(0)
@@ -105,7 +105,6 @@ class TomoUNet(nn.Module):
         # ─── ENCODEUR ───
         x1 = self.inc(x)           # (64, 80, 80) -> Sauvegardé pour Skip Connection 1
         p1 = self.pool1(x1)        # (64, 40, 40)
-
         x2 = self.down1(p1)        # (28, 40, 40) -> Sauvegardé pour Skip Connection 2
         p2 = self.pool2(x2)        # (128, 20, 20)
 
