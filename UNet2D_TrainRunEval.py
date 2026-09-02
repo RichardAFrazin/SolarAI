@@ -126,18 +126,21 @@ def TrainingDataSet(nFramesOut, nAnglesObs, StartEndObs, stride=None, RandomProj
 
 # 1. Dataset pour les paires (observation, vérité)
 class TomoDataset(Dataset):
-    def __init__(self, samples_list):
-        self.samples = samples_list
+    def __init__(self, data_dict):
+        self.samples = data_dict['samples']
+        self.proj_times = data_dict['ProjTimes']
 
     def __len__(self):
         return len(self.samples)
 
     def __getitem__(self, idx):
         bp_img, truth_img = self.samples[idx]
+        times = self.proj_times[idx]
         # Conversion obligatoire en tenseurs PyTorch float32
         x = torch.from_numpy(bp_img).float()
         y = torch.from_numpy(truth_img).float()
-        return x, y
+        input_times = torch.from_numpy(times).float()
+        return x, y, input_times
 
 # 2. Fonction pour entraîner le modèle sur une époque
 def train_one_epoch(model, dataloader, criterion, optimizer, device):
@@ -145,16 +148,17 @@ def train_one_epoch(model, dataloader, criterion, optimizer, device):
     running_loss = 0.0
 
     # Barre de progression pour suivre l'avancement
-    progress_bar = tqdm(dataloader, desc="Entraînement", leave=False)
+    progress_bar = tqdm(dataloader, desc="Training", leave=False)
 
-    for bkprojs, targets in progress_bar:
+    for bkprojs, targets, input_times in progress_bar:
         bkprojs = bkprojs.to(device)
         targets = targets.to(device)
+        input_times = input_times.to(device)
 
         optimizer.zero_grad()
 
         # Passage avant (Forward pass)
-        outputs = model(bkprojs)   # Sortie attendue: (B, n_output_times, 80, 80)
+        outputs = model(bkprojs, input_times)   # Sortie attendue: (B, n_output_times, 80, 80)
 
         # loss contains the current loss  value (scalar) and a calculation graph
         loss = criterion(outputs, targets)
@@ -173,11 +177,13 @@ def validate_one_epoch(model, dataloader_val, criterion, device):
 
     # 2. Désactivation du calcul des gradients
     with torch.no_grad():
-        for observations, truth in dataloader_val:
+        for observations, truth, input_times in dataloader_val:
             observations = observations.to(device)
             truth = truth.to(device)
-            # Passage avant uniquement
-            reconstructions = model(observations)
+            input_times = input_times.to(device)
+
+            # forward pass through network
+            reconstructions = model(observations, input_times)
             # Calcul du coût de validation
             loss = criterion(reconstructions, truth)
             running_loss += loss.item() * observations.size(0)
@@ -344,14 +350,17 @@ if __name__ == "__main__":
                              UseSolLS=UseSolLS, regparam=[0.1,0.01],video=PU.vid1)
 
        samp = out['samples']
+       times = out['ProjTimes']
        if UseSolLS:
           sol = out['SolsLS']  # LS solutions
 
        n_input_chan = samp[0][0].shape[0]
        samp_train = samp[:450]
+       times_train = times[:450]
        samp_validation = samp[450:]
-       dataset_train = TomoDataset(samp_train)
-       dataset_val = TomoDataset(samp_validation)
+       times_val = times[450:]
+       dataset_train = TomoDataset(samp_train, times_train)
+       dataset_val = TomoDataset(samp_validation, times_val)
        dataloader_train = DataLoader(dataset_train, batch_size=10, shuffle=True)
        dataloader_val = DataLoader(dataset_val, batch_size=10, shuffle=False)
        model = UN.TomoUNet(n_input_chan=n_input_chan, n_output_times=16).to(device)
