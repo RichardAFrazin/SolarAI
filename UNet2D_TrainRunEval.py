@@ -158,7 +158,7 @@ def train_one_epoch(model, dataloader, criterion, optimizer, device):
         optimizer.zero_grad()
 
         # Passage avant (Forward pass)
-        outputs = model(bkprojs, input_times)   # Sortie attendue: (B, n_output_times, 80, 80)
+        outputs = model(bkprojs, input_times=input_times)   # Sortie attendue: (B, n_output_times, 80, 80)
 
         # loss contains the current loss  value (scalar) and a calculation graph
         loss = criterion(outputs, targets)
@@ -183,7 +183,7 @@ def validate_one_epoch(model, dataloader_val, criterion, device):
             input_times = input_times.to(device)
 
             # forward pass through network
-            reconstructions = model(observations, input_times)
+            reconstructions = model(observations, input_times=input_times)
             # Calcul du coût de validation
             loss = criterion(reconstructions, truth)
             running_loss += loss.item() * observations.size(0)
@@ -236,6 +236,8 @@ def ViewResults(sdex, model, TDSoutput, regparam=0.1, ReturnRMS= False, device="
    targ   = samplist[sdex][1] # target video frames (UNet output)
    times  = TDSoutput['ProjTimes'][sdex]
    angles = TDSoutput['ProjAngles'][sdex]
+   obs_torch   = torch.from_numpy(obs  ).float().unsqueeze(0).to(device)
+   times_torch = torch.from_numpy(times).float().unsqueeze(0).to(device)
 
    ProjMats = []
    for ang in angles:
@@ -246,7 +248,7 @@ def ViewResults(sdex, model, TDSoutput, regparam=0.1, ReturnRMS= False, device="
 
    model.eval()  #disable dropout (enabled by default) for deterministic evaluation
    with torch.no_grad():  # reconstructed video
-      vid_UNet = model( torch.from_numpy(obs).float().unsqueeze(0).to(device) )
+      vid_UNet = model( obs_torch, input_times=times_torch )
       vid_UNet = (vid_UNet.detach().cpu().numpy()).squeeze(axis=0)
    x_UNet = PU.VideoInterpolate(np.median(times), vid_UNet)
 
@@ -266,8 +268,7 @@ def ViewResults(sdex, model, TDSoutput, regparam=0.1, ReturnRMS= False, device="
 
 #%%
 #
-def SaveViewResultsOnDisk(model, TDSoutput, StartEndObs, output_dir,
-                          ProjMats=None, device="cuda"):
+def SaveViewResultsOnDisk(model, TDSoutput, output_dir, device="cuda"):
     print("Warning: This closes all figures!")
 
     samplist = TDSoutput['samples']
@@ -325,6 +326,7 @@ if __name__ == "__main__":
     print(f"Using {device} device.")
 
     n_input_angles = 25
+    StartEndObs  = [3.,13.]
 
     inp1 = input("If you want to build the UNet and train it, type 'B'. If you want to work with the trained model to make images and videos, type 'O'.")
     inp1 = inp1.upper()
@@ -346,7 +348,7 @@ if __name__ == "__main__":
 
        # Initialization.  498 samples with TrainingDataSet nFramesOut=16, StartEndObs=[3.,13.] ,stride=6
 
-       out = TrainingDataSet(16, n_input_angles, [3.,13.],stride=6, RandomProjTimes=RandomProjTimes,
+       out = TrainingDataSet(16, n_input_angles, StartEndObs, stride=6, RandomProjTimes=RandomProjTimes,
                              UseSolLS=UseSolLS, regparam=[0.1,0.01],video=PU.vid1)
 
        samp = out['samples']
@@ -372,15 +374,9 @@ if __name__ == "__main__":
                           criterion, optimizer, device, num_epochs=50)
     elif inp1 == 'O':
       print("This assumes the UNet is in memory as 'model', among other things.")
-      nAnglesObs = 25; StartEndObs  = [3.,13.]
-      out_fine = TrainingDataSet(16, nAnglesObs, StartEndObs, stride=1, RandomProjTimes=RandomProjTimes,
+      out_fine = TrainingDataSet(16, n_input_angles, StartEndObs, stride=1, RandomProjTimes=RandomProjTimes,
                                  UseSolLS=UseSolLS, video=PU.vid1[2687:])
-      angles = np.linspace(0, np.pi*(nAnglesObs-1)/nAnglesObs, nAnglesObs)
-      ProjMats = []
-      for ang in angles:
-         ProjMats.append( CSR(PU.ProjectionSubMatrix(ang, setup=PU.setup)) )
-      SaveViewResultsOnDisk(model, out_fine, StartEndObs, output_dir,
-                          ProjMats=None, UseSolLS=UseSolLS, device="cuda")
+      SaveViewResultsOnDisk(model, out_fine, output_dir, device="cuda")
       CompileImagesToVideo(output_dir, videoname, fps=3)
 
     else: raise ValueError("Must choose 'B' or 'O'.")

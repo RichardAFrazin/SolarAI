@@ -90,15 +90,17 @@ class TomoUNet(nn.Module):
         """
 
 
-    def forward(self, x, input_times):  #  need to include batch dimension
+    def forward(self, x, input_times=None):  #  need to include batch dimension
+        if input_times is None:
+           raise ValueError("input_times in form of torch.tensor on the correct device must be supplied.")
 
-        def TimeKernel1D(input_times):
-          if len(input_times[0,:]) != self.n_input_times:  # it must have a batch dimension
+        def TimeKernel1D(times_of_input):
+          if len(times_of_input[0,:]) != self.n_input_times:  # it must have a batch dimension
              raise ValueError("len(input_times) must equal n_input_times.")
-          n_batch = input_times.shape[0]
-          timekers = torch.zeros(n_batch, self.time_ker_size, device=input_times.device)
+          n_batch = times_of_input.shape[0]
+          timekers = torch.zeros(n_batch, self.time_ker_size, device=times_of_input.device)
           for k in range(n_batch):
-                 s = self.time_network(input_times[k,:].unsqueeze(0))  # add batch dimension
+                 s = self.time_network(times_of_input[k,:].unsqueeze(0))  # add batch dimension
                  timekers[k,:] = s.squeeze(0)
           return timekers
 
