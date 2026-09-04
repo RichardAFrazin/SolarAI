@@ -11,9 +11,7 @@ These are tools for manipulating video inputs to 2D
 """
 
 import numpy as np
-import matplotlib.pyplot as plt
 from scipy.interpolate import Akima1DInterpolator as Akima
-import scipy.sparse as sp
 import cv2
 
 npix=80  #  this project is setup for 80x80 image sequences
@@ -73,7 +71,8 @@ if __name__ == "__main__":
    t1_lgvid = Loadmp4(traffic1_file); # has shape (3000,720,1280)
    t1vid = []
    for k in range(t1_lgvid.shape[0]):
-      t1vid.append( IntegerRebin2DArray(t1_lgvid[k,:,:],(360,640))  )
+      #t1vid.append( IntegerRebin2DArray(t1_lgvid[k,:,:],(360,640))  )
+      t1vid.append( CV2Rebin2DArray(t1_lgvid[k,:,:] , (640,360)) )
    t1vid = np.array(t1vid).astype('float')
    for k in range(t1vid.shape[0]):
       t1vid[k,:,:] = t1vid[k,:,:]/t1vid[k,:,:].max()
@@ -85,7 +84,7 @@ if __name__ == "__main__":
 
    traffic2_file = "highway2.mp4"
    t2newshape = (170,300)  # this scaling comes from comparing the distance between the road stripes in the traffic1 and traffic2 video at the acquisition row
-   t2_cen1 = (148,169); t2_cen2 = (148, 259)
+   t2_cen1 = (130,179); t2_cen2 = (130, 259)
    t2_lgvid = Loadmp4(traffic2_file); # has shape (3000,720,1280)
    t2vid = []
    for k in range(t2_lgvid.shape[0]):
@@ -96,3 +95,5 @@ if __name__ == "__main__":
    t2_vid1 = t2vid[:,t2_cen1[0]-npix//2:t2_cen1[0]+npix//2, t2_cen1[1]-npix//2:t2_cen1[1]+npix//2]
    t2_vid2 = t2vid[:,t2_cen2[0]-npix//2:t2_cen2[0]+npix//2, t2_cen2[1]-npix//2:t2_cen2[1]+npix//2]
    del(t2_lgvid)
+
+   FourStack = lambda k : np.hstack( (np.vstack((t1_vid1[k,:,:],t2_vid1[k,:,:])) , np.vstack((t1_vid2[k,:,:],t2_vid2[k,:,:])) ) )
