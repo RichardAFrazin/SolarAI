@@ -13,33 +13,15 @@ my highway.mp4 video comes from the pixbay.com website:
 
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.interpolate import Akima1DInterpolator as Akima
 import scipy.sparse as sp
 import torch
-import cv2
+import VideoUtils as VU
 
-mp4file = "highway.mp4"; cen1 = (200,381); cen2 = (200, 262); npix=80
+mp4file = "highway1.mp4" # "highway2.mp4"
+cen1 = (200,381); cen2 = (200, 262); npix=80
 setup = {'sz': npix, 'n_ang': 26, 'n_rays': int(np.round(2*np.sqrt(2)*npix)) }
 
 
-#this uses SciPy's Akima1DInterpolator to evaluate a video at times between the frame numbers
-#  video - the video to be evalued.  The first dimension is the frames. E.g., (3000, 256,256) for
-#
-#  times specifies the frame numbers, or fractions thereof, at which the video will be evaluated.
-#     times can be a single float or integer, list or 1D array of times.
-#
-def VideoInterpolate(times, video):
-   tt = np.atleast_1d(times)  # converts times to an np.array
-   if video.ndim != 3:
-      raise ValueError(f"Video shape is {video.shape}.  Video must be a 3D array.")
-   if not ( all(tt >= 0.) and all(tt <= video.shape[0]-1) ):
-      raise ValueError(f"Input time = {tt}.  All times must be at least zero and less than the (number of frames in the video)-1.")
-   frames = np.arange(video.shape[0])
-   interpolator = Akima(frames, video, axis=0)
-   res = interpolator(tt)
-   if np.isscalar(times):  # drop the unwanted dimension from the output
-      return(res[0])
-   return( res )
 
 #This calculates the matrix corresponding to the projection at input angle
 #  angle - the intput angle is in radian units; any real number is ok.
@@ -128,7 +110,7 @@ def ProjectionTimeSeries(AnglesTimes, video, setup=setup, ReturnProjMat=False, R
     A = [];  # if desired, the proj matrix will be collected here
     for k, tup in enumerate(AnglesTimes):  # k is the interpolated video index
        times.append(tup[1])
-    vid = VideoInterpolate(times, video)
+    vid = VU.VideoInterpolate(times, video)
     nrowsA = 0
     for k, tup in enumerate(AnglesTimes):
         A_i = ProjectionSubMatrix(tup[0], setup=setup)
@@ -146,30 +128,6 @@ def ProjectionTimeSeries(AnglesTimes, video, setup=setup, ReturnProjMat=False, R
        return( np.array(backprojs) )
     else:
        return A
-
-
-
-#%%  movie manipulation
-
-def rebin2Darray(array, new_shape): #rebin by averaging over 2x2 pixels
-   shape = (new_shape[0], array.shape[0]//new_shape[0], #4  dimensions
-            new_shape[1], array.shape[1]//new_shape[1])
-   return( array.reshape(shape).mean(3).mean(1) )
-
-def Loadmp4(filename=mp4file):
-   cap = cv2.VideoCapture(mp4file)
-   if not cap.isOpened():
-      print("Can't open video file")
-      exit()
-   frames = []
-   while cap.isOpened(): # make greyscale frames out of color frames
-      ret, frame = cap.read()
-      if not ret: break # end of video
-      gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-      frames.append(gray_frame)
-   cap.release()
-   return(np.array(frames))
-
 
 #%%  Least-squares solution stuff
 
@@ -214,7 +172,7 @@ def StaticReconstruction(video, ProjMats, ProjTimes, RegFcn='Nabla_sparse', regp
       raise ValueError("All ProjTimes values must be >= 0 and <= n_frames-1.")
 
    projs = []
-   vid = VideoInterpolate(ProjTimes, video)
+   vid = VU.VideoInterpolate(ProjTimes, video)
    for k in range(len(ProjTimes)):
       projs.append( ProjMats[k]@vid[k,:,:].reshape((80*80,)) )
       if k == 0 :
@@ -307,23 +265,9 @@ def demo_dynamic(video, regparam=0.1):
    return x.reshape((80,80))
 
 
-
-#%%  load video
-lgvid = Loadmp4(); #lgvid has shape (3000,720,1280)
-vid = []
-for k in range(lgvid.shape[0]):
-   vid.append( rebin2Darray(lgvid[k,:,:],(360,640))  )
-vid = np.array(vid)
-del(lgvid)
-#normpix = (199,430) # a pixel on the white line
-for k in range(vid.shape[0]):
-   vid[k,:,:] /= vid[k,:,:].max()
-vid1 = vid[:,cen1[0]-npix//2:cen1[0]+npix//2, cen1[1]-npix//2:cen1[1]+npix//2]
-vid2 = vid[:,cen2[0]-npix//2:cen2[0]+npix//2, cen2[1]-npix//2:cen2[1]+npix//2]
-
 #%% run demos
 if __name__ == "__main__":
-   lilvid = vid1[1121:1121+40,:,:]
+   lilvid = VU.vid1[1121:1121+40,:,:]
    x_static = demo_static(lilvid, regparam=0.02)
    x_dynamic = demo_dynamic(lilvid, regparam=0.05)
    plt.figure(); plt.imshow(lilvid[2,:,:],cmap='coolwarm');plt.colorbar();plt.title('frame 2, True');
