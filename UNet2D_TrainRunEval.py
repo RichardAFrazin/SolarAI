@@ -56,13 +56,14 @@ def TrainingDataSet(nFramesOut, nAnglesObs, StartEndObs, stride=None, RandomProj
    if (video.shape[1] != 80) or (video.shape[2] != 80):
       raise ValueError("The video must consist of 80x80 images.")
 
-   def RandomTimes(n, StartEnd):  #Returns random obs. times and corresponding angles
-      dt = np.random.rand(n)
-      dt /= np.sum(dt)
-      angles = np.pi*np.cumsum(dt)
-      dt = (StartEnd[1]-StartEnd[0])*np.cumsum(dt)
-      times = StartEnd[0] + dt
-      return   (times, angles)
+   def RndTimesAngs(n, StartEndNom, Tsig=2.):  #Returns random obs. times and corresponding angles
+     deltaT_nom = StartEndNom[1] - StartEndNom[0]
+     deltaT_rnd = Tsig*np.random.randn()
+     dt = np.random.rand(n)  # time steps
+     dt = dt/np.sum(dt) # normalization to unity sum
+     times = StartEndNom[0] - deltaT_rnd/2 + np.cumsum( dt*(deltaT_nom + deltaT_rnd) )
+     angles = np.pi*( -0.5 - deltaT_rnd/deltaT_nom/2 + np.cumsum( dt*(deltaT_nom + deltaT_rnd)/deltaT_nom) )
+     return   (times, angles)
 
    ProjTimes  = []
    ProjAngles = []
@@ -90,7 +91,7 @@ def TrainingDataSet(nFramesOut, nAnglesObs, StartEndObs, stride=None, RandomProj
       bpvid = []  # backprojection video
 
       if RandomProjTimes:
-         (times, angles) = RandomTimes(nAnglesObs, StartEndObs)
+         (times, angles) = RndTimesAngs(nAnglesObs, StartEndObs)
          ProjMats = []
          for angle in angles:
             ProjMats.append(CSR(PU.ProjectionSubMatrix(angle, setup=PU.setup)))
