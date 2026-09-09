@@ -11,14 +11,15 @@ import warnings
 import numpy as np
 from scipy.sparse import csr_matrix as CSR
 import matplotlib.pyplot as plt
-import Tomo2D_UNet as UN
-import ProjectionUtils2D as PU
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm   # training progress bar display
 import glob
 import imageio.v2 as imageio
+import Tomo2D_UNet as UN
+import ProjectionUtils2D as PU
+import VideoUtils as VU
 
 
 
@@ -43,7 +44,7 @@ If UseSolLS is True, a static least-squares solution (x_ls) is computed from the
 regparam - only matters if UseSolLS is True.  Can have more than one value --> more channels added
 
 """
-def TrainingDataSet(nFramesOut, nAnglesObs, StartEndObs, stride=None, RandomProjTimes=False, UseSolLS=False, regparam=[0.1,0.01], video=PU.vid1):
+def TrainingDataSet(nFramesOut, nAnglesObs, StartEndObs, stride=None, RandomProjTimes=False, UseSolLS=False, regparam=[0.1,0.01], video=VU.t1_vid1):
    if stride is None: stride = nFramesOut//2
    stride = int(stride)
    if video.ndim != 3:
@@ -90,8 +91,12 @@ def TrainingDataSet(nFramesOut, nAnglesObs, StartEndObs, stride=None, RandomProj
       truthvid = video[k*stride : k*stride + nFramesOut, :, :]  # truth video
       bpvid = []  # backprojection video
 
-      if RandomProjTimes:
-         (times, angles) = RndTimesAngs(nAnglesObs, StartEndObs)
+      if RandomProjTimes:  # also see False case above
+         ValidProjTimes = False
+         while not ValidProjTimes:
+            (times, angles) = RndTimesAngs(nAnglesObs, StartEndObs)
+            if ( all(times >= 0.) and all(times <= truthvid.shape[0]-1) ):
+               ValidProjTimes = True
          ProjMats = []
          for angle in angles:
             ProjMats.append(CSR(PU.ProjectionSubMatrix(angle, setup=PU.setup)))
@@ -100,7 +105,7 @@ def TrainingDataSet(nFramesOut, nAnglesObs, StartEndObs, stride=None, RandomProj
       ProjAngles.append(angles) # appended whether or not RandomProjTimes is True
 
       #  get the video interpolated to the observation times
-      vidobs = PU.VideoInterpolate(times, truthvid)  # temporal interpolation
+      vidobs = VU.VideoInterpolate(times, truthvid)  # temporal interpolation
       for i in range(len(angles)):
          proj_i = ProjMats[i]@vidobs[i].reshape((80*80,))  # projection
          bp_i = ProjMats[i].T@proj_i  # backprojection
@@ -245,13 +250,13 @@ def ViewResults(sdex, model, TDSoutput, regparam=0.1, ReturnRMS= False, device="
       ProjMats.append( PU.ProjectionSubMatrix(ang, setup=PU.setup) )
 
    x_static = PU.StaticReconstruction(targ, ProjMats, times, RegFcn='Nabla_sparse', regparam=regparam, ShowSolver=False)
-   x_true = PU.VideoInterpolate(np.median(times), targ)
+   x_true = VU.VideoInterpolate(np.median(times), targ)
 
    model.eval()  #disable dropout (enabled by default) for deterministic evaluation
    with torch.no_grad():  # reconstructed video
       vid_UNet = model( obs_torch, input_times=times_torch )
       vid_UNet = (vid_UNet.detach().cpu().numpy()).squeeze(axis=0)
-   x_UNet = PU.VideoInterpolate(np.median(times), vid_UNet)
+   x_UNet = VU.VideoInterpolate(np.median(times), vid_UNet)
 
    image_out = np.hstack((x_true, x_UNet, x_static));
    rms = [np.std(x_UNet-x_true), np.std(x_static - x_true)]
@@ -337,7 +342,7 @@ if __name__ == "__main__":
        if inp2.upper() == 'N' : UseSolLS = False
        elif inp2.upper() == 'Y': UseSolLS = True
        else: raise ValueError("Must choose 'Y' or 'N'.")
-    inp3 = input("Do you want random observation times within the interval specified by StartEndObs?  [Y] or [N]o.")
+    inp3 = input("Do you want random observation times?  [Y] or [N]o.")
     if inp3.upper() == 'N'  : RandomProjTimes = False
     elif inp3.upper() == 'Y': RandomProjTimes = True
     else: raise ValueError("Must choose 'Y' or 'N'.")
@@ -350,7 +355,7 @@ if __name__ == "__main__":
        # Initialization.  498 samples with TrainingDataSet nFramesOut=16, StartEndObs=[3.,13.] ,stride=6
 
        out = TrainingDataSet(16, n_input_angles, StartEndObs, stride=6, RandomProjTimes=RandomProjTimes,
-                             UseSolLS=UseSolLS, regparam=[0.1,0.01],video=PU.vid1)
+                             UseSolLS=UseSolLS, regparam=[0.1,0.01],video=VU.t1_vid1)
 
        samp = out['samples']
        times = out['ProjTimes']
@@ -376,7 +381,7 @@ if __name__ == "__main__":
     elif inp1 == 'O':
       print("This assumes the UNet is in memory as 'model', among other things.")
       out_fine = TrainingDataSet(16, n_input_angles, StartEndObs, stride=1, RandomProjTimes=RandomProjTimes,
-                                 UseSolLS=UseSolLS, video=PU.vid1[2687:])
+                                 UseSolLS=UseSolLS, video=VU.t1_vid1[2687:])
       SaveViewResultsOnDisk(model, out_fine, output_dir, device="cuda")
       CompileImagesToVideo(output_dir, videoname, fps=3)
 

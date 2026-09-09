@@ -62,7 +62,8 @@ def CV2Rebin2DArray(array, new_shape):
 
 #%%
 
-if __name__ == "__main__":
+#if __name__ == "__main__":
+if True:
 
    traffic1_file = "highway1.mp4";
    t1_cen1 = (200,381); t1_cen2 = (200, 262)  # set extraction location
