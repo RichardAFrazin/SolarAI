@@ -11,6 +11,8 @@ import warnings
 import numpy as np
 from scipy.sparse import csr_matrix as CSR
 import matplotlib.pyplot as plt
+from os.path import join
+import pickle
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
@@ -237,11 +239,11 @@ def LoadCheckpoint(model, optimizer, fnameWpath):
 # regparam - regularization paramter for the static reconstruction
 # ReturnRMS returns RMS errors if True
 def ViewResults(sdex, model, TDSoutput, regparam=0.1, ReturnRMS= False, device="cuda"):
-   samplist = TDSoutput['samples']
+   samplist = TDSoutput['DataSet']['samples']
    obs   = samplist[sdex][0]  # observations (UNet input)
    targ   = samplist[sdex][1] # target video frames (UNet output)
-   times  = TDSoutput['ProjTimes'][sdex]
-   angles = TDSoutput['ProjAngles'][sdex]
+   times  = TDSoutput['DataSet']['ProjTimes'][sdex]
+   angles = TDSoutput['DataSet']['ProjAngles'][sdex]
    obs_torch   = torch.from_numpy(obs  ).float().unsqueeze(0).to(device)
    times_torch = torch.from_numpy(times).float().unsqueeze(0).to(device)
 
@@ -277,7 +279,7 @@ def ViewResults(sdex, model, TDSoutput, regparam=0.1, ReturnRMS= False, device="
 def SaveViewResultsOnDisk(model, TDSoutput, output_dir, device="cuda"):
     print("Warning: This closes all figures!")
 
-    samplist = TDSoutput['samples']
+    samplist = TDSoutput['DataSet']['samples']
 
     os.makedirs(output_dir, exist_ok=True)
     plt.ioff() # Évite d'ouvrir des fenêtres pop-up qui saturent l'écran
@@ -352,23 +354,46 @@ if __name__ == "__main__":
 #%%
     if inp1 == 'B':
 
-       # Initialization.  498 samples with TrainingDataSet nFramesOut=16, StartEndObs=[3.,13.] ,stride=6
+       # traf1vid1: 498 samples with TrainingDataSet nFramesOut=16, StartEndObs=[3.,13.] ,stride=6
 
-       out = TrainingDataSet(16, n_input_angles, StartEndObs, stride=6, RandomProjTimes=RandomProjTimes,
+       RunDataSetCreationExample = False
+       if RunDataSetCreationExample:
+          out = TrainingDataSet(16, n_input_angles, StartEndObs, stride=6, RandomProjTimes=RandomProjTimes,
                              UseSolLS=UseSolLS, regparam=[0.1,0.01],video=VU.t1_vid1)
 
-       samp = out['samples']
-       times = out['ProjTimes']
-       if UseSolLS:
-          sol = out['SolsLS']  # LS solutions
+       DataSetFiles = ['DataSet_traf1vid1_wLS_RndTime.pickle',
+                       'DataSet_traf1vid2_wLS_RndTime.pickle',
+                       'DataSet_traf2vid1_wLS_RndTime.pickle',
+                       'DataSet_traf2vid2_wLS_RndTime.pickle',]
+       DataSetPath = './'
+
+
+       UseThese = [0,1,2,3]
+       samp = []; times = []
+       for setnum in UseThese:
+         with open(join(DataSetPath , DataSetFiles[setnum]), 'rb') as filepointer:
+             out = pickle.load(filepointer)
+         if 'DataSet' in out:
+            samp += out['DataSet']['samples']
+            times += out['DataSet']['ProjTimes']
+         else:
+            raise ValueError("Invalid Dictionary Keys.")
+
+       #samp = out['samples']
+       #times = out['ProjTimes']
+       #if UseSolLS: sol = out['SolsLS']  # LS solutions
 
        n_input_chan  = samp[0][0].shape[0]  # may not equal n_input_times
        n_output_chan = samp[0][1].shape[0]  # number of output times
        n_input_times = len(times[0])
-       samp_train = samp[:450]
-       times_train = times[:450]
-       samp_validation = samp[450:]
-       times_val = times[450:]
+       #samp_train = samp[:450]
+       samp_train = samp[:450] + samp[499:]
+       #times_train = times[:450]
+       times_train = times[:450] + times[499:]
+       #samp_validation = samp[450:]
+       samp_validation = samp[450:499]
+       #times_val = times[450:]
+       times_val = times[450:499]
        dataset_train = TomoDataset(samp_train, times_train)
        dataset_val = TomoDataset(samp_validation, times_val)
        dataloader_train = DataLoader(dataset_train, batch_size=10, shuffle=True)
@@ -380,8 +405,12 @@ if __name__ == "__main__":
                           criterion, optimizer, device, num_epochs=50)
     elif inp1 == 'O':
       print("This assumes the UNet is in memory as 'model', among other things.")
-      out_fine = TrainingDataSet(16, n_input_angles, StartEndObs, stride=1, RandomProjTimes=RandomProjTimes,
-                                 UseSolLS=UseSolLS, video=VU.t1_vid1[2687:])
+      if False:
+         out_fine = TrainingDataSet(16, n_input_angles, StartEndObs, stride=1, RandomProjTimes=RandomProjTimes,
+                                 UseSolLS=UseSolLS, video=VU.t1_vid1[2687:])  # see samp_train and samp_validation above
+      else:
+         with open('FineValDataSet_wLS_wRndT.pickle','rb') as filepointer:
+            out_fine = pickle.load(filepointer)
       SaveViewResultsOnDisk(model, out_fine, output_dir, device="cuda")
       CompileImagesToVideo(output_dir, videoname, fps=3)
 
