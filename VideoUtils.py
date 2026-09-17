@@ -17,7 +17,56 @@ import cv2
 npix=80  #  this project is setup for 80x80 image sequences
 
 
+#%%extract the portion of a video between times t1 and t2 (units: seconds)
+def ExtractVideoPortion(VidFileIn, VidFileOut, t1, t2):
+   cap = cv2.VideoCapture(VidFileIn)
+   if not cap.isOpened():
+         raise ValueError("Invalid Input Video File.")
+
+   def CountFrames():  # count the images in the video.  Last resort in case of a problem reading the header information.
+        print("Counting frames in the video. A 10 min video at 06 fps takes about 30 s.")
+        count = 0
+        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)  #start at first image
+        while True:
+            ret, _ = cap.read()  # On lit l'image sans la stocker en mémoire (_)
+            if not ret:
+                break
+            count += 1
+        cap.set(cv2.CAP_PROP_POS_FRAMES, 0) # rewind the video
+        return count
+
+   fps = cap.get(cv2.CAP_PROP_FPS) # may not work due to a header problem
+   total_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+   # total_frames = CountFrames()
+   total_time = total_frames/fps
+   if not (0 <= t1 < t2 <= total_time):
+      raise ValueError(f"Invalid cut times.  Video duration is {total_time} seconds.")
+
+   width =  int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+   height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+   frame_start = int(t1*fps);
+   frame_end = int(t2*fps)
+
+   fourcc = cv2.VideoWriter_fourcc(*'avc1')
+   out = cv2.VideoWriter(VidFileOut, fourcc, fps, (width, height))
+   cap.set(cv2.CAP_PROP_POS_FRAMES, frame_start)
+   current_frame = frame_start
+   while current_frame <= frame_end:
+      ret, frame = cap.read()
+      if not ret:
+         break
+      out.write(frame)
+      current_frame += 1
+
+   cap.release(); out.release()
+   cv2.destroyAllWindows()
+   print("Successful Extraction.")
+#%%
+
+
+
 def Loadmp4(filename):  # load video and convert it to greyscale
+   print("This is too memory intensive for large videos.")
    cap = cv2.VideoCapture(filename)
    if not cap.isOpened():
       print("Can't open video file")

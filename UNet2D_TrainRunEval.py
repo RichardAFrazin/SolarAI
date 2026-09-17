@@ -349,8 +349,8 @@ if __name__ == "__main__":
     elif inp3.upper() == 'Y': RandomProjTimes = True
     else: raise ValueError("Must choose 'Y' or 'N'.")
 
-    output_dir = "./video_frames4"
-    videoname = "UNet_rndTime_2LS_results.gif"
+    output_dir = "./video_frames5"
+    videoname = "UNet_rndTime_2LS_moredata_results.gif"
 #%%
     if inp1 == 'B':
 
