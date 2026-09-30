@@ -12,6 +12,8 @@ These are tools for manipulating video inputs to 2D
 
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.animation as anim
+import os
 from scipy.interpolate import Akima1DInterpolator as Akima
 import cv2
 
@@ -73,8 +75,30 @@ def ExtractVideoPortion(VidFileIn, VidFileOut, t1, t2, target_size=None, graysca
    print("Successful Extraction.")
 #%%
 
+#The calling function should create a variable for the animation object ("ani")
+# video - a 3D array with first dimension being time (frame numbers)
+# frame_interval - time per frame in milliseconds
+def AnimateNpArray(video, frame_interval=15, repeat=False, cmap='coolwarm'):
+   if video.ndim != 3:
+      raise ValueError(f"Video shape is {video.shape}.  Video must be a 3D array.")
+
+   fig, ax = plt.subplots();
+   ax.axis('off'); # makes a cleaner presentation
+   #show first image
+   im = ax.imshow(video[0], cmap=cmap, vmin=video.min(), vmax=video.max())
+
+   def update(frame_index):
+      im.set_data(video[frame_index])
+      return [im]
 
 
+   ani = anim.FuncAnimation(fig, update, frames=video.shape[0], blit=True,
+                            interval=frame_interval,repeat=repeat);
+
+   plt.show() #launch video
+   return ani
+
+#%%
 def Loadmp4(filename):  # load video and convert it to greyscale
    print("This is too memory intensive for large videos.")
    cap = cv2.VideoCapture(filename)
@@ -124,8 +148,30 @@ def CV2Rebin2DArray(array, new_shape):
    return newar
 
 #%%
+   #to see the keys of this dict-like object returned by this fcn,
+   #   use print(list(vids.keys()))
+def Load80x80Videos(subject='Ducks'):
+   subjects = ['Ducks','Traffic']
+   if subject not in subjects:
+      raise ValueError(f"kwarg 'subject' must be one of: {subjects}")
+   duckvid80x80file    = "DuckVideo80x80Arrays.npz"
+   if not os.path.isfile(duckvid80x80file):
+      raise FileNotFoundError(f"Cannot find {duckvid80x80file}")
+   trafficvid80x80file = "TrafficVideo80x80Arrays.npz"
+   if not os.path.isfile(trafficvid80x80file):
+      raise FileNotFoundError(f"Cannot find {trafficvid80x80file}")
+   if subject == 'Ducks':
+      vids = np.load(duckvid80x80file)
+   elif subject == 'Traffic':
+      vids = np.load(trafficvid80x80file)
+   else:
+      vids = None
+   return vids
 
-if __name__ == "__main__":
+
+
+#%%
+
    if False:
 
       traffic1_file = "highway1.mp4";
@@ -160,6 +206,8 @@ if __name__ == "__main__":
 
       FourStack = lambda k : np.hstack( (np.vstack((t1_vid1[k,:,:],t2_vid1[k,:,:])) , np.vstack((t1_vid2[k,:,:],t2_vid2[k,:,:])) ) )
 
+#%%
+
    if False:  # get 4 videos, each with 80x80 pixels
       duckvidfile = '../../DuckVideos/MVI_0011_cut2_.MP4'
       dv = Loadmp4(duckvidfile)
@@ -175,6 +223,8 @@ if __name__ == "__main__":
 
    if False:
 #%%    #run some static recons to get a feel for the temporal varation
+       # an acquisition time of 16 frames produces images that are sifnificantly
+       #    compromised by the time variation, but not complete garbage.
       import ProjectionUtils2D as PU
       vid = dv3
       n_ang = 40
